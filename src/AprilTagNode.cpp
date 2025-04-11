@@ -18,6 +18,7 @@
 // apriltag
 #include "tag_functions.hpp"
 #include <apriltag.h>
+#include "geometry_msgs/msg/pose_stamped.hpp"
 
 
 #define IF(N, V) \
@@ -80,6 +81,7 @@ private:
 
     const image_transport::CameraSubscriber sub_cam;
     const rclcpp::Publisher<apriltag_msgs::msg::AprilTagDetectionArray>::SharedPtr pub_detections;
+    const rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr pub_tagpose;
     tf2_ros::TransformBroadcaster tf_broadcaster;
 
     pose_estimation_f estimate_pose = nullptr;
@@ -105,6 +107,7 @@ AprilTagNode::AprilTagNode(const rclcpp::NodeOptions& options)
         declare_parameter("image_transport", "raw", descr({}, true)),
         rmw_qos_profile_sensor_data)),
     pub_detections(create_publisher<apriltag_msgs::msg::AprilTagDetectionArray>("detections", rclcpp::QoS(1))),
+    pub_tagpose(create_publisher<geometry_msgs::msg::PoseStamped>("detected_dock_pose", rclcpp::QoS(1))),
     tf_broadcaster(this)
 {
     // read-only parameters
@@ -203,6 +206,9 @@ void AprilTagNode::onCamera(const sensor_msgs::msg::Image::ConstSharedPtr& msg_i
 
     apriltag_msgs::msg::AprilTagDetectionArray msg_detections;
     msg_detections.header = msg_img->header;
+    
+    geometry_msgs::msg::PoseStamped msg_tagpose;
+    msg_tagpose.header = msg_img->header;
 
     std::vector<geometry_msgs::msg::TransformStamped> tfs;
 
@@ -233,6 +239,8 @@ void AprilTagNode::onCamera(const sensor_msgs::msg::Image::ConstSharedPtr& msg_i
         std::memcpy(msg_detection.homography.data(), det->H->data, sizeof(double) * 9);
         msg_detections.detections.push_back(msg_detection);
 
+        
+
         // 3D orientation and position
         if(estimate_pose != nullptr && calibrated) {
             geometry_msgs::msg::TransformStamped tf;
@@ -241,10 +249,20 @@ void AprilTagNode::onCamera(const sensor_msgs::msg::Image::ConstSharedPtr& msg_i
             tf.child_frame_id = tag_frames.count(det->id) ? tag_frames.at(det->id) : std::string(det->family->name) + ":" + std::to_string(det->id);
             const double size = tag_sizes.count(det->id) ? tag_sizes.at(det->id) : tag_edge_size;
             tf.transform = estimate_pose(det, intrinsics, size);
+
+            // set tag pose
+            msg_tagpose.pose.position.x = tf.transform.translation.x;
+            msg_tagpose.pose.position.y = tf.transform.translation.y;
+            msg_tagpose.pose.position.z = tf.transform.translation.z;
+            msg_tagpose.pose.orientation.x = tf.transform.rotation.x;
+            msg_tagpose.pose.orientation.y = tf.transform.rotation.y;
+            msg_tagpose.pose.orientation.z = tf.transform.rotation.z;
+            msg_tagpose.pose.orientation.w = tf.transform.rotation.w;
+
             tfs.push_back(tf);
         }
     }
-
+    pub_tagpose->publish(msg_tagpose);
     pub_detections->publish(msg_detections);
 
     if(estimate_pose != nullptr)
