@@ -260,9 +260,10 @@ void AprilTagNode::onCamera(const sensor_msgs::msg::Image::ConstSharedPtr& msg_i
             msg_tagpose.pose.orientation.w = tf.transform.rotation.w;
 
             tfs.push_back(tf);
+            pub_tagpose->publish(msg_tagpose);
         }
     }
-    pub_tagpose->publish(msg_tagpose);
+    
     pub_detections->publish(msg_detections);
 
     if(estimate_pose != nullptr)
