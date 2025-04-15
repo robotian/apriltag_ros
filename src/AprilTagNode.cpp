@@ -253,7 +253,7 @@ void AprilTagNode::onCamera(const sensor_msgs::msg::Image::ConstSharedPtr& msg_i
             // set tag pose
             msg_tagpose.pose.position.x = tf.transform.translation.x;
             msg_tagpose.pose.position.y = tf.transform.translation.y;
-            msg_tagpose.pose.position.z = tf.transform.translation.z;
+            msg_tagpose.pose.position.z = tf.transform.translation.z - 0.7;
             msg_tagpose.pose.orientation.x = tf.transform.rotation.x;
             msg_tagpose.pose.orientation.y = tf.transform.rotation.y;
             msg_tagpose.pose.orientation.z = tf.transform.rotation.z;
