@@ -44,6 +44,8 @@ find_package(Threads REQUIRED)
 find_package(OpenCV REQUIRED COMPONENTS core calib3d)
 find_package(apriltag 3.2 REQUIRED)
 
+find_package(tf2_geometry_msgs REQUIRED)
+
 if(cv_bridge_VERSION VERSION_GREATER_EQUAL 3.3.0)
     add_compile_definitions(cv_bridge_HPP)
 endif()
@@ -72,6 +74,7 @@ target_link_libraries(conversion
 )
 ament_target_dependencies(conversion
     geometry_msgs
+    tf2_geometry_msgs
     tf2
 )
 set_property(TARGET conversion PROPERTY

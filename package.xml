@@ -19,6 +19,8 @@
   <depend>apriltag</depend>
   <depend>image_transport</depend>
   <depend>cv_bridge</depend>
+  <depend>tf2_geometry_msgs</depend>
+  
 
   <exec_depend>camera_ros</exec_depend>
   <exec_depend condition="$ROS_DISTRO != 'humble'">image_proc</exec_depend>

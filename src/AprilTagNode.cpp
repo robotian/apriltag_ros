@@ -19,6 +19,7 @@
 #include "tag_functions.hpp"
 #include <apriltag.h>
 #include "geometry_msgs/msg/pose_stamped.hpp"
+#include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
 
 
 #define IF(N, V) \
@@ -250,14 +251,23 @@ void AprilTagNode::onCamera(const sensor_msgs::msg::Image::ConstSharedPtr& msg_i
             const double size = tag_sizes.count(det->id) ? tag_sizes.at(det->id) : tag_edge_size;
             tf.transform = estimate_pose(det, intrinsics, size);
 
+            tf2::Quaternion q_orig, q_x_rot, q_z_rot, q_new; 
+            tf2::convert(tf.transform.rotation, q_orig);
+            q_x_rot.setRPY(M_PI/2, 0, 0);
+            q_z_rot.setRPY(0, 0, M_PI);
+            q_new = q_z_rot * q_x_rot * q_orig;
+            q_new.normalize();
+            // Convert back to pose orientation
+            tf2::convert(q_new, msg_tagpose.pose.orientation);
+
             // set tag pose
             msg_tagpose.pose.position.x = tf.transform.translation.x;
             msg_tagpose.pose.position.y = tf.transform.translation.y;
             msg_tagpose.pose.position.z = tf.transform.translation.z - 0.7;
-            msg_tagpose.pose.orientation.x = tf.transform.rotation.x;
-            msg_tagpose.pose.orientation.y = tf.transform.rotation.y;
-            msg_tagpose.pose.orientation.z = tf.transform.rotation.z;
-            msg_tagpose.pose.orientation.w = tf.transform.rotation.w;
+            // msg_tagpose.pose.orientation.x = tf.transform.rotation.x;
+            // msg_tagpose.pose.orientation.y = tf.transform.rotation.y;
+            // msg_tagpose.pose.orientation.z = tf.transform.rotation.z;
+            // msg_tagpose.pose.orientation.w = tf.transform.rotation.w;
 
             tfs.push_back(tf);
             pub_tagpose->publish(msg_tagpose);
