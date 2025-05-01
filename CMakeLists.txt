@@ -43,6 +43,7 @@ find_package(Eigen3 REQUIRED NO_MODULE)
 find_package(Threads REQUIRED)
 find_package(OpenCV REQUIRED COMPONENTS core calib3d)
 find_package(apriltag 3.2 REQUIRED)
+find_package(zed_msgs REQUIRED)
 
 if(cv_bridge_VERSION VERSION_GREATER_EQUAL 3.3.0)
     add_compile_definitions(cv_bridge_HPP)
@@ -121,9 +122,38 @@ rclcpp_components_register_node(AprilTagNode
     EXECUTABLE "apriltag_node"
 )
 
+# composable node
+add_library(PoseCorrectionNode SHARED
+    src/PoseCorrectionNode.cpp
+)
+ament_target_dependencies(PoseCorrectionNode
+    rclcpp
+    rclcpp_components
+    sensor_msgs
+    apriltag_msgs
+    tf2_ros
+    image_transport
+    cv_bridge
+    zed_msgs
+)
+target_link_libraries(PoseCorrectionNode
+    apriltag::apriltag
+    tags
+    pose_estimation
+)
+rclcpp_components_register_node(PoseCorrectionNode
+    PLUGIN "PoseCorrectionNode"
+    EXECUTABLE "pose_correction_node"
+)
+
 ament_environment_hooks(${ament_cmake_package_templates_ENVIRONMENT_HOOK_LIBRARY_PATH})
 
 install(TARGETS AprilTagNode
+    ARCHIVE DESTINATION lib
+    LIBRARY DESTINATION lib
+)
+
+install(TARGETS PoseCorrectionNode
     ARCHIVE DESTINATION lib
     LIBRARY DESTINATION lib
 )
