@@ -6,6 +6,9 @@
  *
  * Purpose: Runs composed with the ZED ROS2 Wrapper in order
  * to detect AprilTags and use them to correct the pose.
+ * 
+ * Note: I'm following the convention already used by the repository, but man
+ * they should separate their declarations into a header file
  */
 
 
@@ -43,7 +46,35 @@ class PoseCorrectionNode : public rclcpp::Node
 
         ~PoseCorrectionNode();
 
-    protected:
+    private:
+
+        const OnSetParametersCallbackHandle::SharedPtr cb_parameter;
+
+        apriltag_family_t* tf;
+        apriltag_detector_t* const td;
+
+        // parameter
+        std::mutex mutex;
+        double tag_edge_size;
+        std::atomic<int> max_hamming;
+        std::atomic<bool> profile;
+        std::unordered_map<int, std::string> tag_frames;
+        std::unordered_map<int, double> tag_sizes;
+
+        // TF destructor
+        std::function<void(apriltag_family_t*)> tf_destructor;
+
+        // Camera subscription, AprilTag Detections, and broadcaster for transformations
+        const image_transport::CameraSubscriber sub_cam;
+        const rclcpp::Publisher<apriltag_msgs::msg::AprilTagDetectionArray>::SharedPtr pub_detections;
+        tf2_ros::TransformBroadcaster tf_broadcaster;
+
+        // Service client to reset pose
+        rclcpp::Client<zed_msgs::srv::SetPose>::SharedPtr _setPoseClient;
+
+        // Function used to estimate pose
+        pose_estimation_f estimate_pose = nullptr;
+
 
         /**
          * @brief Callback to detect Apriltags and call the pose correction
@@ -88,41 +119,19 @@ class PoseCorrectionNode : public rclcpp::Node
          * @return false 
          */
         bool resetZedPose(tf2::Transform & new_pose);
-
-
-    private:
-
-        const OnSetParametersCallbackHandle::SharedPtr cb_parameter;
-
-        apriltag_family_t* tf;
-        apriltag_detector_t* const td;
-
-        // parameter
-        std::mutex mutex;
-        double tag_edge_size;
-        std::atomic<int> max_hamming;
-        std::atomic<bool> profile;
-        std::unordered_map<int, std::string> tag_frames;
-        std::unordered_map<int, double> tag_sizes;
-
-        std::function<void(apriltag_family_t*)> tf_destructor;
-
-        const image_transport::CameraSubscriber sub_cam;
-        const rclcpp::Publisher<apriltag_msgs::msg::AprilTagDetectionArray>::SharedPtr pub_detections;
-        tf2_ros::TransformBroadcaster tf_broadcaster;
-
-        // Service client
-        rclcpp::Client<zed_msgs::srv::SetPose>::SharedPtr _setPoseClient;
-
-        pose_estimation_f estimate_pose = nullptr;
-
-        void onCamera(const sensor_msgs::msg::Image::ConstSharedPtr& msg_img, const sensor_msgs::msg::CameraInfo::ConstSharedPtr& msg_ci);
-
+    
+        /**
+         * @brief Callback that is triggered when parameters are changed. Pulled from AprilTagNode
+         * 
+         * @param parameters 
+         * @return rcl_interfaces::msg::SetParametersResult 
+         */
         rcl_interfaces::msg::SetParametersResult onParameter(const std::vector<rclcpp::Parameter>& parameters);
 
 };
-
 RCLCPP_COMPONENTS_REGISTER_NODE(PoseCorrectionNode)
+
+
 
 PoseCorrectionNode::PoseCorrectionNode(const rclcpp::NodeOptions& options) : Node("apriltag_pose_correction", options)
 {
@@ -130,3 +139,31 @@ PoseCorrectionNode::PoseCorrectionNode(const rclcpp::NodeOptions& options) : Nod
 }
 
 PoseCorrectionNode::~PoseCorrectionNode(){}
+
+
+rcl_interfaces::msg::SetParametersResult
+PoseCorrectionNode::onParameter(const std::vector<rclcpp::Parameter>& parameters)
+{
+    rcl_interfaces::msg::SetParametersResult result;
+
+    mutex.lock();
+
+    for(const rclcpp::Parameter& parameter : parameters) {
+        RCLCPP_DEBUG_STREAM(get_logger(), "setting: " << parameter);
+
+        IF("detector.threads", td->nthreads)
+        IF("detector.decimate", td->quad_decimate)
+        IF("detector.blur", td->quad_sigma)
+        IF("detector.refine", td->refine_edges)
+        IF("detector.sharpening", td->decode_sharpening)
+        IF("detector.debug", td->debug)
+        IF("max_hamming", max_hamming)
+        IF("profile", profile)
+    }
+
+    mutex.unlock();
+
+    result.successful = true;
+
+    return result;
+}
