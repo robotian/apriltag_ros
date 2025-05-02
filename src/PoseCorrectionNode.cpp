@@ -7,7 +7,7 @@
  * Purpose: Runs composed with the ZED ROS2 Wrapper in order
  * to detect AprilTags and use them to correct the pose.
  * 
- * Note: I'm following the convention already used by the repository, but man
+ * Note: I'm following the convention already used by the repository, but man,
  * they should separate their declarations into a header file
  */
 
@@ -37,6 +37,45 @@
 #include "tag_functions.hpp"
 #include <apriltag.h>
 
+
+// Macro/Helpers for checkign and assigning parameters. Carried over from AprilTagNode
+#define IF(N, V) \
+    if(assign_check(parameter, N, V)) continue;
+
+template<typename T>
+void assign(const rclcpp::Parameter& parameter, T& var)
+{
+    var = parameter.get_value<T>();
+}
+    
+template<typename T>
+void assign(const rclcpp::Parameter& parameter, std::atomic<T>& var)
+{
+    var = parameter.get_value<T>();
+}
+    
+template<typename T>
+bool assign_check(const rclcpp::Parameter& parameter, const std::string& name, T& var)
+{
+    if(parameter.get_name() == name) {
+        assign(parameter, var);
+        return true;
+    }
+    return false;
+}
+
+// Creates a parameter descriptor. Carriud over from AprilTagNode
+rcl_interfaces::msg::ParameterDescriptor
+descr(const std::string& description, const bool& read_only = false)
+{
+    rcl_interfaces::msg::ParameterDescriptor descr;
+
+    descr.description = description;
+    descr.read_only = read_only;
+
+    return descr;
+}
+
 // Class to encompass the apriltag detection and pose correction
 class PoseCorrectionNode : public rclcpp::Node
 {
@@ -48,32 +87,37 @@ class PoseCorrectionNode : public rclcpp::Node
 
     private:
 
-        const OnSetParametersCallbackHandle::SharedPtr cb_parameter;
+        // Callback handle to allow updating parameters during runtime
+        const OnSetParametersCallbackHandle::SharedPtr paramCallbackHandler_;
 
-        apriltag_family_t* tf;
-        apriltag_detector_t* const td;
+        // Apriltag family and detector pointers
+        
+        const std::string tagFamilyStr_;
+        apriltag_family_t* tagFamily_;
+
+        apriltag_detector_t* const tagDetector_;
 
         // parameter
-        std::mutex mutex;
-        double tag_edge_size;
-        std::atomic<int> max_hamming;
-        std::atomic<bool> profile;
-        std::unordered_map<int, std::string> tag_frames;
-        std::unordered_map<int, double> tag_sizes;
+        std::mutex mutex_;
+        double tagEdgeSize_;
+        std::atomic<int> maxHamming_;
+        std::atomic<bool> profile_;
+        std::unordered_map<int, std::string> tagFrames_;
+        std::unordered_map<int, double> tagSizes_;
 
         // TF destructor
-        std::function<void(apriltag_family_t*)> tf_destructor;
+        std::function<void(apriltag_family_t*)> tagFamilyDestructor_;
 
         // Camera subscription, AprilTag Detections, and broadcaster for transformations
-        const image_transport::CameraSubscriber sub_cam;
-        const rclcpp::Publisher<apriltag_msgs::msg::AprilTagDetectionArray>::SharedPtr pub_detections;
-        tf2_ros::TransformBroadcaster tf_broadcaster;
+        const image_transport::CameraSubscriber cameraSub_;
+        const rclcpp::Publisher<apriltag_msgs::msg::AprilTagDetectionArray>::SharedPtr detectionPub_;
+        tf2_ros::TransformBroadcaster tfBroadcaster_;
 
         // Service client to reset pose
-        rclcpp::Client<zed_msgs::srv::SetPose>::SharedPtr _setPoseClient;
+        rclcpp::Client<zed_msgs::srv::SetPose>::SharedPtr setPoseClient_;
 
         // Function used to estimate pose
-        pose_estimation_f estimate_pose = nullptr;
+        pose_estimation_f estimatePose_ = nullptr;
 
 
         /**
@@ -83,7 +127,7 @@ class PoseCorrectionNode : public rclcpp::Node
          * @param img Image from the ZED X camera
          * @param cam_info Camera info from the ZED X camera
          */
-        void camera_callback(
+        void onCamera(
             const sensor_msgs::msg::Image::ConstSharedPtr & img,
             const sensor_msgs::msg::CameraInfo::ConstSharedPtr & cam_info);
 
@@ -133,37 +177,32 @@ RCLCPP_COMPONENTS_REGISTER_NODE(PoseCorrectionNode)
 
 
 
-PoseCorrectionNode::PoseCorrectionNode(const rclcpp::NodeOptions& options) : Node("apriltag_pose_correction", options)
+PoseCorrectionNode::PoseCorrectionNode(const rclcpp::NodeOptions& options) : Node("apriltag_pose_correction", options),
+    paramCallbackHandler_(add_on_set_parameters_callback(
+                            std::bind(&PoseCorrectionNode::onParameter, 
+                            this, 
+                            std::placeholders::_1))),
+    tagDetector_(apriltag_detector_create()),
+    cameraSub_(image_transport::create_camera_subscription(
+                this, 
+                this->get_node_topics_interface()->resolve_topic_name("image_rect"),
+                std::bind(&PoseCorrectionNode::onCamera, this, std::placeholders::_1, std::placeholders::_2),
+                declare_parameter("image_transport", "raw", descr({}, true)),
+                rmw_qos_profile_sensor_data
+    )),
+    detectionPub_(create_publisher<apriltag_msgs::msg::AprilTagDetectionArray>("apriltag_detections", rclcpp::QoS(1))),
+    tfBroadcaster_(this)
 {
+    // read-only parameters
+    const std::string tagFamily = declare_parameter("family", "36h11", descr("tag family", true));
+    tagEdgeSize_ = declare_parameter("size", 1.0, descr("default tag size", true));
+
 
 }
 
-PoseCorrectionNode::~PoseCorrectionNode(){}
-
-
-rcl_interfaces::msg::SetParametersResult
-PoseCorrectionNode::onParameter(const std::vector<rclcpp::Parameter>& parameters)
+PoseCorrectionNode::~PoseCorrectionNode()
 {
-    rcl_interfaces::msg::SetParametersResult result;
-
-    mutex.lock();
-
-    for(const rclcpp::Parameter& parameter : parameters) {
-        RCLCPP_DEBUG_STREAM(get_logger(), "setting: " << parameter);
-
-        IF("detector.threads", td->nthreads)
-        IF("detector.decimate", td->quad_decimate)
-        IF("detector.blur", td->quad_sigma)
-        IF("detector.refine", td->refine_edges)
-        IF("detector.sharpening", td->decode_sharpening)
-        IF("detector.debug", td->debug)
-        IF("max_hamming", max_hamming)
-        IF("profile", profile)
-    }
-
-    mutex.unlock();
-
-    result.successful = true;
-
-    return result;
+    apriltag_detector_destroy(tagDetector_);
+    tagFamilyDestructor_(tagFamily_);
 }
+
