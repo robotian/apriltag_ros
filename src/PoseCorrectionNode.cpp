@@ -119,6 +119,8 @@ class PoseCorrectionNode : public rclcpp::Node
         // Function used to estimate pose
         pose_estimation_f estimatePose_ = nullptr;
 
+        // Map of pose estimation methods to their respective functions. Carried over form AprilTagNode. 
+        std::unordered_map<std::string, pose_estimation_f> poseEstimationMethods_;
 
         /**
          * @brief Callback to detect Apriltags and call the pose correction
@@ -193,10 +195,62 @@ PoseCorrectionNode::PoseCorrectionNode(const rclcpp::NodeOptions& options) : Nod
     detectionPub_(create_publisher<apriltag_msgs::msg::AprilTagDetectionArray>("apriltag_detections", rclcpp::QoS(1))),
     tfBroadcaster_(this)
 {
-    // read-only parameters
+    // read-only parameters, grab the tag family and edge size used
     const std::string tagFamily = declare_parameter("family", "36h11", descr("tag family", true));
     tagEdgeSize_ = declare_parameter("size", 1.0, descr("default tag size", true));
 
+    // Grab the tag ids, frame names, and sizes
+    const auto tagIDs = declare_parameter("tag.ids", std::vector<int64_t>{}, descr("tag ids", true));
+    const auto tagFrames = declare_parameter("tag.frames", std::vector<std::string>{}, 
+                                                descr("tag frame names per id", true));
+    const auto tagSizes = declare_parameter("tag.sizes", std::vector<double>{}, descr("tag sizes per id", true));
+
+    // Grab the pose estimation method
+    const std::string& poseEstimationMethod = declare_parameter("pose_estimation_method", "pnp", 
+                                                                descr("pose estimation method: \"pnp\" (more accurate)"
+                                                                " or \"homography\" (faster)"), true);
+
+    poseEstimationMethods_["homography"] = homography;
+    poseEstimationMethods_["pnp"] = pnp;
+
+    
+    // Check and set the pose estimation method
+    if(!poseEstimationMethod.empty())
+    {
+        if(poseEstimationMethods_.count(poseEstimationMethod))
+        {
+            estimatePose_ = poseEstimationMethods_.at(poseEstimationMethod);
+        }
+        else
+        {
+            throw std::runtime_error("Invalid pose estimation method: " + poseEstimationMethod); 
+        }
+    }
+    else
+    {
+        throw std::runtime_error("Pose estimation cannot be empty!");
+    }
+
+    // Grab all of the detector parameters
+    declare_parameter("detector.threads", tagDetector_->nthreads, descr("number of threads"));
+    declare_parameter("detector.decimate", tagDetector_->quad_decimate, descr("decimate resolution for quad detection"));
+    declare_parameter("detector.blur", tagDetector_->quad_sigma, descr("sigma of Gaussian blur for quad detection"));
+    declare_parameter("detector.refine", tagDetector_->refine_edges, descr("snap to strong gradients"));
+    declare_parameter("detector.sharpening", tagDetector_->decode_sharpening, descr("sharpening of decoded images"));
+    declare_parameter("detector.debug", tagDetector_->debug, descr("write additional debugging images to working directory"));
+
+    // Grab the hamming and profling parameters
+    declare_parameter("max_hamming", 0, descr("reject detections with more corrected bits than allowed"));
+    declare_parameter("profile", false, descr("print profiling information to stdout"));
+
+    // Check that the number of tag IDs matches the number of frames
+    if(!tagFrames.empty())
+    {
+        if(tagIDs.size() != tagFrames.size())
+        {
+            throw std::runtime_error("Number of tag ids ()");
+        }
+    }
 
 }
 
