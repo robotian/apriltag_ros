@@ -210,16 +210,13 @@ PoseCorrectionNode::PoseCorrectionNode(const rclcpp::NodeOptions& options) : Nod
                                                                 descr("pose estimation method: \"pnp\" (more accurate)"
                                                                 " or \"homography\" (faster)"), true);
 
-    poseEstimationMethods_["homography"] = homography;
-    poseEstimationMethods_["pnp"] = pnp;
-
     
     // Check and set the pose estimation method
     if(!poseEstimationMethod.empty())
     {
-        if(poseEstimationMethods_.count(poseEstimationMethod))
+        if(pose_estimation_methods.count(poseEstimationMethod))
         {
-            estimatePose_ = poseEstimationMethods_.at(poseEstimationMethod);
+            estimatePose_ = pose_estimation_methods.at(poseEstimationMethod);
         }
         else
         {
