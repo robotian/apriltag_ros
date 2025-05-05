@@ -119,19 +119,17 @@ class PoseCorrectionNode : public rclcpp::Node
         // Function used to estimate pose
         pose_estimation_f estimatePose_ = nullptr;
 
-        // Map of pose estimation methods to their respective functions. Carried over form AprilTagNode. 
-        std::unordered_map<std::string, pose_estimation_f> poseEstimationMethods_;
 
         /**
          * @brief Callback to detect Apriltags and call the pose correction
          * Service
          * 
          * @param img Image from the ZED X camera
-         * @param cam_info Camera info from the ZED X camera
+         * @param camInfo Camera info from the ZED X camera
          */
         void onCamera(
             const sensor_msgs::msg::Image::ConstSharedPtr & img,
-            const sensor_msgs::msg::CameraInfo::ConstSharedPtr & cam_info);
+            const sensor_msgs::msg::CameraInfo::ConstSharedPtr & camInfo);
 
         /**
          * @brief Initializes transformations
@@ -173,6 +171,7 @@ class PoseCorrectionNode : public rclcpp::Node
          * @return rcl_interfaces::msg::SetParametersResult 
          */
         rcl_interfaces::msg::SetParametersResult onParameter(const std::vector<rclcpp::Parameter>& parameters);
+
 
 };
 RCLCPP_COMPONENTS_REGISTER_NODE(PoseCorrectionNode)
@@ -257,3 +256,140 @@ PoseCorrectionNode::~PoseCorrectionNode()
     tagFamilyDestructor_(tagFamily_);
 }
 
+void PoseCorrectionNode::onCamera(
+    const sensor_msgs::msg::Image::ConstSharedPtr & img,
+    const sensor_msgs::msg::CameraInfo::ConstSharedPtr & camInfo
+)
+{
+    // camera intrinsics for rectified images
+    const std::array<double, 4> intrinsics = {camInfo->p[0], camInfo->p[5], camInfo->p[2], camInfo->p[6]};
+
+    // check for valid intrinsics
+    const bool calibrated = camInfo->width && camInfo->height &&
+                            intrinsics[0] && intrinsics[1] && intrinsics[2] && intrinsics[3];
+ 
+    // Make sure the camera is calibrated
+    if(!calibrated) 
+    {
+        RCLCPP_WARN_STREAM(get_logger(), "The camera is not calibrated!");
+    }
+
+    // Convert to an 8bit monochrome image using OpenCV
+    const cv::Mat imgUint8 = cv_bridge::toCvShare(img, "mono8")->image;
+
+    // create a struct of the image
+    image_u8_t im{imgUint8.cols, imgUint8.rows, imgUint8.cols, imgUint8.data};
+
+    // Detect apriltags (must be mutually exclusive)
+    mutex_.lock();
+    zarray_t* detections = apriltag_detector_detect(tagDetector_, &im);
+    mutex_.unlock();
+
+    // Set up detections message
+    apriltag_msgs::msg::AprilTagDetectionArray detectionsMsg;
+    detectionsMsg.header = img->header;
+
+    // Display the timeprofile if set (not quite sure what this is)
+    if(profile_)
+        timeprofile_display(tagDetector_->tp);
+
+
+    // Set up vector of transformations to publish
+    std::vector<geometry_msgs::msg::TransformStamped> transformsToTags;
+    
+        
+    for(int i = 0; i < zarray_size(detections); i++)
+    {
+        // Grab the current detection
+        apriltag_detection_t* currDetection;
+        zarray_get(detections, i, &currDetection);
+
+        //DEBUG:
+        RCLCPP_DEBUG(get_logger(),
+                     "detection %3d: id (%2dx%2d)-%-4d, hamming %d, margin %8.3f\n",
+                     i, currDetection->family->nbits, currDetection->family->h, currDetection->id,
+                     currDetection->hamming, currDetection->decision_margin);
+
+        // Ignore tags we aren't trying to detect
+        if(!tagFrames_.empty() && !tagFrames_.count(currDetection->id))
+            continue;
+
+        // Reject detections that require too many corrected bits (from parameter)
+        if(currDetection->hamming > maxHamming_)
+            continue;
+
+        // Grab the detection
+        apriltag_msgs::msg::AprilTagDetection tagDetection;
+        tagDetection.family = std::string(currDetection->family->name);
+        tagDetection.id = currDetection->id;
+        tagDetection.hamming = currDetection->hamming;
+        tagDetection.decision_margin = currDetection->decision_margin;
+        tagDetection.centre.x = currDetection->c[0];
+        tagDetection.centre.y = currDetection->c[1];
+        std::memcpy(tagDetection.corners.data(), currDetection->p, sizeof(double) * 8);
+        std::memcpy(tagDetection.homography.data(), currDetection->H->data, sizeof(double) * 9);
+        detectionsMsg.detections.push_back(tagDetection);
+
+        //TODO: add in the pose estimation here. Check the original AprilTagNode and the ZED ArUco localization stuff
+
+
+    }
+
+    detectionPub_->publish(detectionsMsg);
+    // TODO: broadcast transforms if we have any
+    apriltag_detections_destroy(detections);
+
+}
+
+rcl_interfaces::msg::SetParametersResult
+PoseCorrectionNode::onParameter(const std::vector<rclcpp::Parameter>& parameters)
+{
+    rcl_interfaces::msg::SetParametersResult result;
+
+    mutex_.lock();
+
+    for(const rclcpp::Parameter& parameter : parameters) {
+        RCLCPP_DEBUG_STREAM(get_logger(), "setting: " << parameter);
+
+        IF("detector.threads", tagDetector_->nthreads)
+        IF("detector.decimate", tagDetector_->quad_decimate)
+        IF("detector.blur", tagDetector_->quad_sigma)
+        IF("detector.refine", tagDetector_->refine_edges)
+        IF("detector.sharpening", tagDetector_->decode_sharpening)
+        IF("detector.debug", tagDetector_->debug)
+        IF("max_hamming", maxHamming_)
+        IF("profile", profile_)
+    }
+
+    mutex_.unlock();
+
+    result.successful = true;
+
+    return result;
+}
+
+
+
+void PoseCorrectionNode::initTFs()
+{
+
+}
+
+void PoseCorrectionNode::broadcastMarkerTFs()
+{
+
+}
+
+
+void PoseCorrectionNode::getTransformFromTf(
+    std::string /*targetFrame*/, std::string /*sourceFrame*/,
+    tf2::Transform & /*out_tr*/)
+{
+
+}
+
+
+bool PoseCorrectionNode::resetZedPose(tf2::Transform & /*new_pose*/)
+{
+    return true;
+}
