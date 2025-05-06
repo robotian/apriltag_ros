@@ -104,6 +104,7 @@ class PoseCorrectionNode : public rclcpp::Node
         std::atomic<bool> profile_;
         std::unordered_map<int, std::string> tagFrames_;
         std::unordered_map<int, double> tagSizes_;
+        std::vector<long int> tagIDs_;
 
         // TF destructor
         std::function<void(apriltag_family_t*)> tagFamilyDestructor_;
@@ -195,7 +196,7 @@ PoseCorrectionNode::PoseCorrectionNode(const rclcpp::NodeOptions& options) : Nod
     tfBroadcaster_(this)
 {
     // read-only parameters, grab the tag family and edge size used
-    const std::string tagFamily = declare_parameter("family", "36h11", descr("tag family", true));
+    const std::string tagFamilyStr = declare_parameter("family", "36h11", descr("tag family", true));
     tagEdgeSize_ = declare_parameter("size", 1.0, descr("default tag size", true));
 
     // Grab the tag ids, frame names, and sizes
@@ -239,15 +240,45 @@ PoseCorrectionNode::PoseCorrectionNode(const rclcpp::NodeOptions& options) : Nod
     declare_parameter("max_hamming", 0, descr("reject detections with more corrected bits than allowed"));
     declare_parameter("profile", false, descr("print profiling information to stdout"));
 
-    // Check that the number of tag IDs matches the number of frames
+
+    // Error check tag frames & ids
     if(!tagFrames.empty())
     {
         if(tagIDs.size() != tagFrames.size())
         {
-            throw std::runtime_error("Number of tag ids ()");
+            throw std::runtime_error("Number of tag frames: " + std::to_string(tagFrames.size()) +
+            " and number of tag ids: " + std::to_string(tagIDs.size()) + " differ!");
         }
     }
 
+    // Error check tag sizes & ids
+    if(!tagSizes.empty())
+    {
+        // Verify that each id has its own size registered
+        if(tagIDs.size() != tagSizes.size())
+        {
+            throw std::runtime_error("Number of tag sizes: " + std::to_string(tagSizes.size()) +
+             " and number of tag ids: " + std::to_string(tagIDs.size()) + " differ!");
+        }
+
+        tagIDs_ = tagIDs;
+        for(size_t i = 0; i < tagIDs.size(); i++)
+        {
+            tagSizes_[tagIDs[i]] = tagSizes[i];
+        }
+    }
+
+    // Attempt to add tag family to the detector
+    if(tag_fun.count(tagFamilyStr))
+    {
+        tagFamily_ = tag_fun.at(tagFamilyStr).first();
+        tagFamilyDestructor_ = tag_fun.at(tagFamilyStr).second;
+        apriltag_detector_add_family(tagDetector_, tagFamily_);
+    } 
+    else
+    {
+        throw std::runtime_error("Unsupported tag family: " + tagFamilyStr);
+    }
 }
 
 PoseCorrectionNode::~PoseCorrectionNode()
@@ -296,8 +327,8 @@ void PoseCorrectionNode::onCamera(
 
     // Set up vector of transformations to publish
     std::vector<geometry_msgs::msg::TransformStamped> transformsToTags;
-    
         
+
     for(int i = 0; i < zarray_size(detections); i++)
     {
         // Grab the current detection
