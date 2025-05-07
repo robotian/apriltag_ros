@@ -327,8 +327,11 @@ void PoseCorrectionNode::onCamera(
 
     // Set up vector of transformations to publish
     std::vector<geometry_msgs::msg::TransformStamped> transformsToTags;
-        
 
+    geometry_msgs::msg::TransformStamped tfToClosestTag;
+    double distanceToClosestTag = __DBL_MAX__;
+    int closestTagID = -1;
+        
     for(int i = 0; i < zarray_size(detections); i++)
     {
         // Grab the current detection
@@ -361,13 +364,41 @@ void PoseCorrectionNode::onCamera(
         std::memcpy(tagDetection.homography.data(), currDetection->H->data, sizeof(double) * 9);
         detectionsMsg.detections.push_back(tagDetection);
 
-        //TODO: add in the pose estimation here. Check the original AprilTagNode and the ZED ArUco localization stuff
+        // If calibrated, then estimate the pose of the tag
+        if(calibrated)
+        {
+            geometry_msgs::msg::TransformStamped tf;
+            tf.header = img->header;
+            int currTagID = currDetection->id;
+            char* currTagName = currDetection->family->name;
+            std::string familyAndID = std::string(currTagName) + ":" + std::to_string(currTagID);
+            tf.child_frame_id = tagFrames_.count(currTagID) ? tagFrames_.at(currTagID) : familyAndID;
+            const double size = tagSizes_.count(currTagID) ? tagSizes_.at(currTagID) : tagEdgeSize_;
+            tf.transform = estimatePose_(currDetection, intrinsics, size);
+            transformsToTags.push_back(tf);
+
+            // TODO calculate the length of the translation
+            // If the distance is less than the current closest distance, update it, the id, and the transform
+
+        }
+        else
+        {
+            RCLCPP_WARN(get_logger(), "Detection: %d. Camera is not calibrated, will not be estimating pose!", i);
+        }
 
 
     }
 
+    // TODO grab the closest transform, put it in terms of the map frame using the known tag position, and 
+    // call the set_pose service of the ZED camera
+
+    // Publish detections
     detectionPub_->publish(detectionsMsg);
-    // TODO: broadcast transforms if we have any
+
+    // Broadcast transforms
+    tfBroadcaster_.sendTransform(transformsToTags);
+
+    // Deallocate detections
     apriltag_detections_destroy(detections);
 
 }
