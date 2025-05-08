@@ -31,6 +31,9 @@
 #include <tf2_ros/transform_broadcaster.h>
 #include <tf2_ros/transform_listener.h>
 #include <zed_msgs/srv/set_pose.hpp>
+#include <Eigen/Dense>
+
+using Eigen::Vector3f;
 
 
 // apriltag
@@ -114,11 +117,18 @@ class PoseCorrectionNode : public rclcpp::Node
         const rclcpp::Publisher<apriltag_msgs::msg::AprilTagDetectionArray>::SharedPtr detectionPub_;
         tf2_ros::TransformBroadcaster tfBroadcaster_;
 
+        // Transform Buffer and Listener
+        std::shared_ptr<tf2_ros::Buffer> transformBuffer_{nullptr};
+        std::shared_ptr<tf2_ros::TransformListener> transformListener_;
+
         // Service client to reset pose
         rclcpp::Client<zed_msgs::srv::SetPose>::SharedPtr setPoseClient_;
 
         // Function used to estimate pose
         pose_estimation_f estimatePose_ = nullptr;
+
+        std::string cameraName_;
+        std::string worldFrame_;
 
 
         /**
@@ -139,19 +149,14 @@ class PoseCorrectionNode : public rclcpp::Node
         void initTFs();
 
         /**
-         * @brief Broadcasts markers for each TF
-         * 
-         */
-        void broadcastMarkerTFs();
-
-        /**
-         * @brief Get existing transformations from TF
+         * @brief Get existing transformations from TF. This function is
+         * pulled from the ZED ArUco tag localization example. 
          * 
          * @param targetFrame 
          * @param sourceFrame 
          * @param out_tr 
          */
-        void getTransformFromTf(
+        bool getTransformFromTf(
             std::string targetFrame, std::string sourceFrame,
             tf2::Transform & out_tr);
         
@@ -195,6 +200,11 @@ PoseCorrectionNode::PoseCorrectionNode(const rclcpp::NodeOptions& options) : Nod
     detectionPub_(create_publisher<apriltag_msgs::msg::AprilTagDetectionArray>("apriltag_detections", rclcpp::QoS(1))),
     tfBroadcaster_(this)
 {
+
+    // Construct the transform buffer and listener
+    transformBuffer_ = std::make_unique<tf2_ros::Buffer>(this->get_clock());
+    transformListener_ = std::make_unique<tf2_ros::TransformListener>(*transformBuffer_);
+
     // read-only parameters, grab the tag family and edge size used
     const std::string tagFamilyStr = declare_parameter("family", "36h11", descr("tag family", true));
     tagEdgeSize_ = declare_parameter("size", 1.0, descr("default tag size", true));
@@ -209,6 +219,11 @@ PoseCorrectionNode::PoseCorrectionNode(const rclcpp::NodeOptions& options) : Nod
     const std::string& poseEstimationMethod = declare_parameter("pose_estimation_method", "pnp", 
                                                                 descr("pose estimation method: \"pnp\" (more accurate)"
                                                                 " or \"homography\" (faster)"), true);
+
+    cameraName_ = declare_parameter("general.camera_name", "", descr("Camera name for TF lookup"), true);
+    worldFrame_ = declare_parameter("general.world_frame_id", "", descr("World frame ID "), true);
+    
+    RCLCPP_ERROR(get_logger(), "-%s, -%s", cameraName_.c_str(), worldFrame_.c_str());
 
     
     // Check and set the pose estimation method
@@ -377,8 +392,15 @@ void PoseCorrectionNode::onCamera(
             tf.transform = estimatePose_(currDetection, intrinsics, size);
             transformsToTags.push_back(tf);
 
-            // TODO calculate the length of the translation
-            // If the distance is less than the current closest distance, update it, the id, and the transform
+            // Calculate the length of the translation, and determine if its the closest tag
+            Vector3f transVec(tf.transform.translation.x, tf.transform.translation.y, tf.transform.translation.z);
+            double tagDist = transVec.norm();
+            if(tagDist < distanceToClosestTag)
+            {
+                distanceToClosestTag = tagDist;
+                tfToClosestTag = tf;
+                closestTagID = currDetection->id;
+            }
 
         }
         else
@@ -389,8 +411,11 @@ void PoseCorrectionNode::onCamera(
 
     }
 
-    // TODO grab the closest transform, put it in terms of the map frame using the known tag position, and 
-    // call the set_pose service of the ZED camera
+    if(closestTagID != -1)
+    {
+        //TODO
+        RCLCPP_INFO(get_logger(), "Correcting pose using Tag ID: %d", closestTagID);
+    }
 
     // Publish detections
     detectionPub_->publish(detectionsMsg);
@@ -434,20 +459,57 @@ PoseCorrectionNode::onParameter(const std::vector<rclcpp::Parameter>& parameters
 
 void PoseCorrectionNode::initTFs()
 {
-
-}
-
-void PoseCorrectionNode::broadcastMarkerTFs()
-{
-
+    // Grab the camera coptical frame to camera base frame
+    std::string camLeftFrame = cameraName_ + "_left_camera_frame";
+    std::string camBaseFrame = cameraName_ + "_camera_link";
 }
 
 
-void PoseCorrectionNode::getTransformFromTf(
+bool PoseCorrectionNode::getTransformFromTf(
     std::string /*targetFrame*/, std::string /*sourceFrame*/,
     tf2::Transform & /*out_tr*/)
 {
 
+//   std::string msg;
+//   geometry_msgs::msg::TransformStamped transf_msg;
+
+//   try 
+//   {
+//     _tfBuffer->canTransform(
+//       targetFrame, sourceFrame, TIMEZERO_ROS, 1000ms,
+//       &msg);
+//     RCLCPP_INFO_STREAM(
+//       get_logger(), "[getTransformFromTf] canTransform '"
+//         << targetFrame.c_str() << "' -> '"
+//         << sourceFrame.c_str()
+//         << "':" << msg.c_str());
+//     std::this_thread::sleep_for(3ms);
+
+//     transf_msg =
+//       _tfBuffer->lookupTransform(targetFrame, sourceFrame, TIMEZERO_ROS, 1s);
+//   } catch (const tf2::TransformException & ex) {
+//     RCLCPP_ERROR(
+//       this->get_logger(),
+//       "[getTransformFromTf] Could not transform '%s' to '%s': %s",
+//       targetFrame.c_str(), sourceFrame.c_str(), ex.what());
+//     return false;
+//   }
+
+//   tf2::Stamped<tf2::Transform> tr_stamped;
+//   tf2::fromMsg(transf_msg, tr_stamped);
+//   out_tr = tr_stamped;
+//   double r, p, y;
+//   out_tr.getBasis().getRPY(r, p, y, 1);
+
+//   RCLCPP_INFO(
+//     get_logger(),
+//     "[getTransformFromTf] '%s' -> '%s': \n\t[%.3f,%.3f,%.3f] - "
+//     "[%.3f°,%.3f°,%.3f°]",
+//     sourceFrame.c_str(), targetFrame.c_str(), out_tr.getOrigin().x(),
+//     out_tr.getOrigin().y(), out_tr.getOrigin().z(), r * RAD2DEG,
+//     p * RAD2DEG, y * RAD2DEG);
+
+  return true;
 }
 
 

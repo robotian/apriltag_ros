@@ -141,7 +141,9 @@ target_link_libraries(PoseCorrectionNode
     apriltag::apriltag
     tags
     pose_estimation
+    Eigen3::Eigen
 )
+
 rclcpp_components_register_node(PoseCorrectionNode
     PLUGIN "PoseCorrectionNode"
     EXECUTABLE "pose_correction_node"
