@@ -26,6 +26,7 @@
 #include <rclcpp_components/register_node_macro.hpp>
 #include <sensor_msgs/msg/camera_info.hpp>
 #include <sensor_msgs/msg/image.hpp>
+#include <tf2_ros/static_transform_broadcaster.h>
 #include <tf2_ros/transform_broadcaster.h>
 #include <tf2_ros/buffer.h>
 #include <tf2_ros/transform_broadcaster.h>
@@ -67,7 +68,7 @@ bool assign_check(const rclcpp::Parameter& parameter, const std::string& name, T
     return false;
 }
 
-// Creates a parameter descriptor. Carriud over from AprilTagNode
+// Creates a parameter descriptor. Carried over from AprilTagNode
 rcl_interfaces::msg::ParameterDescriptor
 descr(const std::string& description, const bool& read_only = false)
 {
@@ -109,17 +110,23 @@ class PoseCorrectionNode : public rclcpp::Node
         std::unordered_map<int, double> tagSizes_;
         std::vector<long int> tagIDs_;
 
+        // Maps of tag IDs to pose and frame name
+        std::unordered_map<int64_t, std::vector<_Float64>> globalTagPoseMap_;
+        std::unordered_map<int64_t, std::string> tagIDtoFrame_;
+
         // TF destructor
         std::function<void(apriltag_family_t*)> tagFamilyDestructor_;
 
-        // Camera subscription, AprilTag Detections, and broadcaster for transformations
+        // Camera subscription, AprilTag Detections, and broadcasters for transformations
         const image_transport::CameraSubscriber cameraSub_;
         const rclcpp::Publisher<apriltag_msgs::msg::AprilTagDetectionArray>::SharedPtr detectionPub_;
         tf2_ros::TransformBroadcaster tfBroadcaster_;
+        tf2_ros::StaticTransformBroadcaster staticBroadcaster_;
 
         // Transform Buffer and Listener
         std::shared_ptr<tf2_ros::Buffer> transformBuffer_{nullptr};
         std::shared_ptr<tf2_ros::TransformListener> transformListener_;
+        
 
         // Service client to reset pose
         rclcpp::Client<zed_msgs::srv::SetPose>::SharedPtr setPoseClient_;
@@ -198,7 +205,8 @@ PoseCorrectionNode::PoseCorrectionNode(const rclcpp::NodeOptions& options) : Nod
                 rmw_qos_profile_sensor_data
     )),
     detectionPub_(create_publisher<apriltag_msgs::msg::AprilTagDetectionArray>("apriltag_detections", rclcpp::QoS(1))),
-    tfBroadcaster_(this)
+    tfBroadcaster_(this),
+    staticBroadcaster_(this)
 {
 
     // Construct the transform buffer and listener
@@ -220,12 +228,25 @@ PoseCorrectionNode::PoseCorrectionNode(const rclcpp::NodeOptions& options) : Nod
                                                                 descr("pose estimation method: \"pnp\" (more accurate)"
                                                                 " or \"homography\" (faster)"), true);
 
-    cameraName_ = declare_parameter("general.camera_name", "", descr("Camera name for TF lookup"), true);
-    worldFrame_ = declare_parameter("general.world_frame_id", "", descr("World frame ID "), true);
-    
-    RCLCPP_ERROR(get_logger(), "-%s, -%s", cameraName_.c_str(), worldFrame_.c_str());
+    cameraName_ = declare_parameter("camera_name", "", descr("Camera name for TF lookup", true));
+    worldFrame_ = declare_parameter("world_frame_id", "", descr("World frame ID ", true));
 
-    
+
+    // Grab the global poses for each tag
+    for(int64_t id : tagIDs)
+    {
+        std::string currTagPoseParam = "global_pose_list.tag_";
+        currTagPoseParam += std::to_string(id);
+        std::vector<_Float64> currTagPose = declare_parameter(currTagPoseParam, std::vector<_Float64>{});
+        globalTagPoseMap_[id] = currTagPose;        
+    }                                       
+
+    // Check we have a transform defined for each tag
+    if(globalTagPoseMap_.size() != tagIDs.size())
+    {
+        throw std::runtime_error("Size Mismatch between the passed tag IDs and their global transforms!");
+    }
+
     // Check and set the pose estimation method
     if(!poseEstimationMethod.empty())
     {
@@ -264,6 +285,12 @@ PoseCorrectionNode::PoseCorrectionNode(const rclcpp::NodeOptions& options) : Nod
             throw std::runtime_error("Number of tag frames: " + std::to_string(tagFrames.size()) +
             " and number of tag ids: " + std::to_string(tagIDs.size()) + " differ!");
         }
+
+        // Populate the map from tag ID to frames
+        for(size_t i = 0; i < tagIDs.size(); i++)
+        {
+            tagIDtoFrame_[tagIDs[i]] = tagFrames[i];
+        }
     }
 
     // Error check tag sizes & ids
@@ -294,6 +321,10 @@ PoseCorrectionNode::PoseCorrectionNode(const rclcpp::NodeOptions& options) : Nod
     {
         throw std::runtime_error("Unsupported tag family: " + tagFamilyStr);
     }
+
+    // Initialize transformations
+    initTFs();
+
 }
 
 PoseCorrectionNode::~PoseCorrectionNode()
@@ -462,6 +493,35 @@ void PoseCorrectionNode::initTFs()
     // Grab the camera coptical frame to camera base frame
     std::string camLeftFrame = cameraName_ + "_left_camera_frame";
     std::string camBaseFrame = cameraName_ + "_camera_link";
+
+    for(int64_t id : tagIDs_)
+    {
+        // Create and send the global transform for each tag
+        // There's probably a way to do this in less lines of code
+        geometry_msgs::msg::TransformStamped globalTagTransform;
+        globalTagTransform.header.stamp = this->get_clock()->now();
+        globalTagTransform.header.frame_id = worldFrame_;
+        globalTagTransform.child_frame_id = tagIDtoFrame_[id];
+        std::vector<_Float64> currTransform = globalTagPoseMap_[id];
+        tf2::Quaternion globalRot; 
+        globalRot.setRPY(currTransform[4], currTransform[5], currTransform[6]);
+        globalTagTransform.transform.translation.x = currTransform[0];
+        globalTagTransform.transform.translation.y = currTransform[1];
+        globalTagTransform.transform.translation.z = currTransform[2];
+        globalTagTransform.transform.rotation.x = globalRot.getX();
+        globalTagTransform.transform.rotation.y = globalRot.getY();
+        globalTagTransform.transform.rotation.z = globalRot.getZ();
+        globalTagTransform.transform.rotation.w = globalRot.getW();
+
+        RCLCPP_INFO(get_logger(), "Sending Static transform from '%s' to '%s': (%f %f %f), (%f, %f, %f, %f)", 
+            worldFrame_.c_str(), tagIDtoFrame_[id].c_str(),
+            globalTagTransform.transform.translation.x, globalTagTransform.transform.translation.y,
+            globalTagTransform.transform.translation.z, globalTagTransform.transform.rotation.x, 
+            globalTagTransform.transform.rotation.y, globalTagTransform.transform.rotation.z, 
+            globalTagTransform.transform.rotation.w);
+
+        staticBroadcaster_.sendTransform(globalTagTransform);
+    }
 }
 
 
