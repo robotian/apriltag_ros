@@ -44,6 +44,8 @@ find_package(Threads REQUIRED)
 find_package(OpenCV REQUIRED COMPONENTS core calib3d)
 find_package(apriltag 3.2 REQUIRED)
 find_package(zed_msgs REQUIRED)
+find_package(tf2 REQUIRED)
+find_package(tf2_geometry_msgs REQUIRED)
 
 if(cv_bridge_VERSION VERSION_GREATER_EQUAL 3.3.0)
     add_compile_definitions(cv_bridge_HPP)
@@ -93,6 +95,7 @@ target_link_libraries(pose_estimation
 ament_target_dependencies(pose_estimation
     geometry_msgs
     tf2
+    tf2_geometry_msgs
 )
 set_property(TARGET pose_estimation PROPERTY
     POSITION_INDEPENDENT_CODE ON

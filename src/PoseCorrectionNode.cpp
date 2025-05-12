@@ -31,11 +31,22 @@
 #include <tf2_ros/buffer.h>
 #include <tf2_ros/transform_broadcaster.h>
 #include <tf2_ros/transform_listener.h>
+#include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
+
 #include <zed_msgs/srv/set_pose.hpp>
 #include <Eigen/Dense>
 
 using Eigen::Vector3f;
 
+using namespace std::chrono_literals;
+using namespace std::placeholders;
+
+#define TIMEZERO_ROS rclcpp::Time(0, 0, RCL_ROS_TIME)
+
+#ifndef DEG2RAD
+#define DEG2RAD 0.017453293
+#define RAD2DEG 57.295777937
+#endif
 
 // apriltag
 #include "tag_functions.hpp"
@@ -136,6 +147,18 @@ class PoseCorrectionNode : public rclcpp::Node
 
         std::string cameraName_;
         std::string worldFrame_;
+
+        // Transforms to move between reference frames
+        tf2::Transform camLeftToBase_;
+        tf2::Transform imageToROS_;
+        tf2::Transform rosToImage_;
+        tf2::Transform tagToImage_;
+        tf2::Transform imageToTag_;
+
+        // Map of tag frames to transforms
+        std::unordered_map<std::string, tf2::Transform> tagTransformMap_;
+
+
 
 
         /**
@@ -492,7 +515,30 @@ void PoseCorrectionNode::initTFs()
 {
     // Grab the camera coptical frame to camera base frame
     std::string camLeftFrame = cameraName_ + "_left_camera_frame";
-    std::string camBaseFrame = cameraName_ + "_camera_link";
+    std::string camBaseFrame = cameraName_ + "_camera_center";
+    bool tfOk = getTransformFromTf(camLeftFrame, camBaseFrame, camLeftToBase_);
+
+    if(!tfOk)
+    {
+        RCLCPP_ERROR(get_logger(), "Could not grab transform '%s' -> '%s', Please verify the parameters and the status "
+        "of the 'ZED State Publisher' node!", camBaseFrame.c_str(), camLeftFrame.c_str());
+        exit(EXIT_FAILURE);
+    }
+
+    // double r, p, y;
+    tf2::Matrix3x3 basis;
+
+    // Set up AprilTag coordinate system to Image coordinate system, and vice versa (NOTE: we might need to change these)
+    basis = tf2::Matrix3x3(-1.0, 0.0, 0.0, 0.0, -1.0, 0.0, 0.0, 0.0, 1.0); // flip x and y, leave z
+    imageToTag_.setIdentity();
+    imageToTag_.setBasis(basis);
+    tagToImage_ = imageToTag_.inverse();
+
+    // Set up ROS coordinate system to image coordinate system, and vice versa (NOTE: we might need to change these)
+    basis = tf2::Matrix3x3(0.0, -1.0, 0.0, 0.0, 0.0, -1.0, 1.0, 0.0, 0.0);
+    rosToImage_.setIdentity();
+    rosToImage_.setBasis(basis);
+    imageToROS_ = rosToImage_.inverse();
 
     for(int64_t id : tagIDs_)
     {
@@ -522,52 +568,68 @@ void PoseCorrectionNode::initTFs()
 
         staticBroadcaster_.sendTransform(globalTagTransform);
     }
+
+    // Grab the tag transform as tf2::Transforms (also verified that we successfully broadcast the static transforms)
+    for(int64_t id : tagIDs_)
+    {
+        tfOk = getTransformFromTf(tagIDtoFrame_[id], worldFrame_, tagTransformMap_[tagIDtoFrame_[id]]);
+        if(!tfOk)
+        {
+            RCLCPP_ERROR(get_logger(), "Could not grab transform '%s' -> '%s', Please verify the AprilTag pose " 
+            "parameters!", worldFrame_.c_str(), tagIDtoFrame_[id].c_str());
+            exit(EXIT_FAILURE);
+        }
+    }
+
+    RCLCPP_ERROR(get_logger(), "Number of tag transforms grabbed from tf: %ld", tagTransformMap_.size());
+
+
 }
 
-
+// Modified slightly from the ZED ArUco localization example code
 bool PoseCorrectionNode::getTransformFromTf(
-    std::string /*targetFrame*/, std::string /*sourceFrame*/,
-    tf2::Transform & /*out_tr*/)
+    std::string targetFrame, std::string sourceFrame,
+    tf2::Transform & out_tr)
 {
 
-//   std::string msg;
-//   geometry_msgs::msg::TransformStamped transf_msg;
+  std::string msg;
+  geometry_msgs::msg::TransformStamped transf_msg;
 
-//   try 
-//   {
-//     _tfBuffer->canTransform(
-//       targetFrame, sourceFrame, TIMEZERO_ROS, 1000ms,
-//       &msg);
-//     RCLCPP_INFO_STREAM(
-//       get_logger(), "[getTransformFromTf] canTransform '"
-//         << targetFrame.c_str() << "' -> '"
-//         << sourceFrame.c_str()
-//         << "':" << msg.c_str());
-//     std::this_thread::sleep_for(3ms);
+  try 
+  {
+    transformBuffer_->canTransform(
+      targetFrame, sourceFrame, TIMEZERO_ROS, 1000ms,
+      &msg);
+    RCLCPP_INFO_STREAM(
+      get_logger(), "[getTransformFromTf] canTransform '"
+        << targetFrame.c_str() << "' -> '"
+        << sourceFrame.c_str()
+        << "':" << msg.c_str());
+    std::this_thread::sleep_for(3ms);
 
-//     transf_msg =
-//       _tfBuffer->lookupTransform(targetFrame, sourceFrame, TIMEZERO_ROS, 1s);
-//   } catch (const tf2::TransformException & ex) {
-//     RCLCPP_ERROR(
-//       this->get_logger(),
-//       "[getTransformFromTf] Could not transform '%s' to '%s': %s",
-//       targetFrame.c_str(), sourceFrame.c_str(), ex.what());
-//     return false;
-//   }
+    transf_msg =
+      transformBuffer_->lookupTransform(targetFrame, sourceFrame, TIMEZERO_ROS, 1s);
+  } catch (const tf2::TransformException & ex) {
+    RCLCPP_ERROR(
+      this->get_logger(),
+      "[getTransformFromTf] Could not transform '%s' to '%s': %s",
+      targetFrame.c_str(), sourceFrame.c_str(), ex.what());
+    return false;
+  }
 
-//   tf2::Stamped<tf2::Transform> tr_stamped;
-//   tf2::fromMsg(transf_msg, tr_stamped);
-//   out_tr = tr_stamped;
-//   double r, p, y;
-//   out_tr.getBasis().getRPY(r, p, y, 1);
+  tf2::Stamped<tf2::Transform> tr_stamped;
+  tf2::fromMsg(transf_msg, tr_stamped);
+  out_tr = tr_stamped;
+  double r, p, y;
+  out_tr.getBasis().getRPY(r, p, y, 1);
 
-//   RCLCPP_INFO(
-//     get_logger(),
-//     "[getTransformFromTf] '%s' -> '%s': \n\t[%.3f,%.3f,%.3f] - "
-//     "[%.3f°,%.3f°,%.3f°]",
-//     sourceFrame.c_str(), targetFrame.c_str(), out_tr.getOrigin().x(),
-//     out_tr.getOrigin().y(), out_tr.getOrigin().z(), r * RAD2DEG,
-//     p * RAD2DEG, y * RAD2DEG);
+  RCLCPP_INFO(
+    get_logger(),
+    "[getTransformFromTf] '%s' -> '%s': \n\t[%.3f,%.3f,%.3f] - "
+    "[%.3f°,%.3f°,%.3f°]",
+    sourceFrame.c_str(), targetFrame.c_str(), out_tr.getOrigin().x(),
+    out_tr.getOrigin().y(), out_tr.getOrigin().z(), r * RAD2DEG,
+    p * RAD2DEG, y * RAD2DEG);
 
   return true;
 }
