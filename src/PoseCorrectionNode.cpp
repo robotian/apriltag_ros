@@ -581,9 +581,6 @@ void PoseCorrectionNode::initTFs()
         }
     }
 
-    RCLCPP_ERROR(get_logger(), "Number of tag transforms grabbed from tf: %ld", tagTransformMap_.size());
-
-
 }
 
 // Modified slightly from the ZED ArUco localization example code
