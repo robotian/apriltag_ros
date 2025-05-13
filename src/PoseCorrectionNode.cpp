@@ -199,6 +199,14 @@ class PoseCorrectionNode : public rclcpp::Node
          * @return false 
          */
         bool resetZedPose(tf2::Transform & new_pose);
+
+        /**
+         * @brief Takes the transform msg provided by estiamte_pose
+         * 
+         * @param tf - Transform msg for the closest tag
+         * @param id - ID of the closest tag
+         */
+        void computeTransform(geometry_msgs::msg::Transform & tf, int id);
     
         /**
          * @brief Callback that is triggered when parameters are changed. Pulled from AprilTagNode
@@ -465,10 +473,14 @@ void PoseCorrectionNode::onCamera(
 
     }
 
+    // TODO - Add a check to see if the closest tag is within a user-defined threshold
     if(closestTagID != -1)
     {
-        //TODO
         RCLCPP_INFO(get_logger(), "Correcting pose using Tag ID: %d", closestTagID);
+
+        // Compute the transform
+        computeTransform(tfToClosestTag.transform, closestTagID);
+
     }
 
     // Publish detections
@@ -515,7 +527,7 @@ void PoseCorrectionNode::initTFs()
 {
     // Grab the camera coptical frame to camera base frame
     std::string camLeftFrame = cameraName_ + "_left_camera_frame";
-    std::string camBaseFrame = cameraName_ + "_camera_center";
+    std::string camBaseFrame = cameraName_ + "_camera_link";
     bool tfOk = getTransformFromTf(camLeftFrame, camBaseFrame, camLeftToBase_);
 
     if(!tfOk)
@@ -581,6 +593,48 @@ void PoseCorrectionNode::initTFs()
         }
     }
 
+}
+
+void PoseCorrectionNode::computeTransform(geometry_msgs::msg::Transform & tf, int id)
+{
+
+    // NOTE - I need to practice more with transforms conceptually, so apologies if
+    // any of the comments here are a bit misleading. It follows the process used in the 
+    // ZED ArUco localization example. 
+
+    // Convert the transform msg to a tf2::Transform
+    tf2::Transform robotToTag;
+    tf2::Vector3 tagTranslation(tf.translation.x, tf.translation.y, tf.translation.z);
+    tf2::Quaternion tagRotation(tf.rotation.x, tf.rotation.y, tf.rotation.z, tf.rotation.w);
+    robotToTag.setOrigin(tagTranslation);
+    robotToTag.setRotation(tagRotation);
+
+    // Change the reference frame (basis) from the tag to the camera
+    tf2::Transform poseImage;
+    poseImage.mult(imageToTag_, robotToTag); // Transform the tag into the image's reference frame
+    poseImage = poseImage.inverse(); // Change the transform from robot to tag --> tag to robot
+
+    // Set up transforms between the tag's to ROS2's reference frames
+    tf2::Transform rosToTag;
+    rosToTag.mult(imageToTag_, rosToImage_);
+    tf2::Transform tagToRos = rosToTag.inverse();
+
+    // Transform the image pose from the left camrea sensor into ROS2's reference frame 
+    tf2::Transform leftPoseTag;
+    leftPoseTag.mult(poseImage, rosToTag);
+    leftPoseTag.mult(tagToRos, leftPoseTag);
+
+    // Transform the camera base to ROS2 coordinates with respect to the marker
+    tf2::Transform basePoseTag;
+    basePoseTag.mult(leftPoseTag, camLeftToBase_);
+
+    // Get the camera pose in the ROS2 world
+    tf2::Transform globalTagPose = tagTransformMap_[tagIDtoFrame_[id]];
+    tf2::Transform cameraMapPose;
+    cameraMapPose.mult(globalTagPose, basePoseTag);
+
+    // Reset the ZED pose 
+   resetZedPose(cameraMapPose);
 }
 
 // Modified slightly from the ZED ArUco localization example code
