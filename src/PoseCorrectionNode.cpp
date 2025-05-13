@@ -356,6 +356,9 @@ PoseCorrectionNode::PoseCorrectionNode(const rclcpp::NodeOptions& options) : Nod
     // Initialize transformations
     initTFs();
 
+    // Create service client
+    setPoseClient_ = create_client<zed_msgs::srv::SetPose>("zed_node/set_pose");
+
 }
 
 PoseCorrectionNode::~PoseCorrectionNode()
@@ -408,7 +411,7 @@ void PoseCorrectionNode::onCamera(
     geometry_msgs::msg::TransformStamped tfToClosestTag;
     double distanceToClosestTag = __DBL_MAX__;
     int closestTagID = -1;
-        
+
     for(int i = 0; i < zarray_size(detections); i++)
     {
         // Grab the current detection
@@ -473,10 +476,9 @@ void PoseCorrectionNode::onCamera(
 
     }
 
-    // TODO - Add a check to see if the closest tag is within a user-defined threshold
     if(closestTagID != -1)
     {
-        RCLCPP_INFO(get_logger(), "Correcting pose using Tag ID: %d", closestTagID);
+        RCLCPP_INFO_STREAM(get_logger(), "Correcting pose using Tag ID: " << closestTagID);
 
         // Compute the transform
         computeTransform(tfToClosestTag.transform, closestTagID);
@@ -686,7 +688,42 @@ bool PoseCorrectionNode::getTransformFromTf(
 }
 
 
-bool PoseCorrectionNode::resetZedPose(tf2::Transform & /*new_pose*/)
+bool PoseCorrectionNode::resetZedPose(tf2::Transform & new_pose)
 {
+
+    // Create service request from transform
+    double r, p, y;
+    auto serviceRequest = std::make_shared<zed_msgs::srv::SetPose::Request>();
+    serviceRequest->pos[0] = new_pose.getOrigin().x();
+    serviceRequest->pos[1] = new_pose.getOrigin().y();
+    serviceRequest->pos[2] = new_pose.getOrigin().z();
+    new_pose.getBasis().getRPY(r, p, y);
+    serviceRequest->orient[0] = r;
+    serviceRequest->orient[1] = p;
+    serviceRequest->orient[2] = y; 
+
+    while(!setPoseClient_->wait_for_service(1s))
+    {
+        if(!rclcpp::ok())
+        {
+            RCLCPP_ERROR(get_logger(), "Interrupted while waiting for the service. Exiting.");
+            return false;
+        }
+        RCLCPP_INFO_STREAM(
+            get_logger(),
+            " * '" << setPoseClient_->get_service_name()
+                   << "' service not available, waiting...");
+    }
+
+    using ServiceResponseFuture = rclcpp::Client<zed_msgs::srv::SetPose>::SharedFuture;
+    auto response_received_callback = [this](ServiceResponseFuture future)
+    {
+        auto result = future.get();
+        RCLCPP_INFO_STREAM(get_logger(), " * ZED Node replied to 'set_pose' call: " << result->message.c_str());
+    };
+
+    auto future_result = setPoseClient_->async_send_request(serviceRequest, response_received_callback);
+
+
     return true;
 }
