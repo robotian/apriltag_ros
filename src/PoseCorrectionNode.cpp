@@ -32,8 +32,8 @@
 #include <tf2_ros/transform_broadcaster.h>
 #include <tf2_ros/transform_listener.h>
 #include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
-
-#include <zed_msgs/srv/set_pose.hpp>
+// #include <zed_msgs/srv/set_pose.hpp>
+#include <zed_interfaces/srv/set_pose.hpp>
 #include <Eigen/Dense>
 
 using Eigen::Vector3f;
@@ -140,7 +140,7 @@ class PoseCorrectionNode : public rclcpp::Node
         
 
         // Service client to reset pose
-        rclcpp::Client<zed_msgs::srv::SetPose>::SharedPtr setPoseClient_;
+        rclcpp::Client<zed_interfaces::srv::SetPose>::SharedPtr setPoseClient_;
 
         // Function used to estimate pose
         pose_estimation_f estimatePose_ = nullptr;
@@ -357,7 +357,7 @@ PoseCorrectionNode::PoseCorrectionNode(const rclcpp::NodeOptions& options) : Nod
     initTFs();
 
     // Create service client
-    setPoseClient_ = create_client<zed_msgs::srv::SetPose>("zed_node/set_pose");
+    setPoseClient_ = create_client<zed_interfaces::srv::SetPose>("zed_node/set_pose");
 
 }
 
@@ -544,12 +544,16 @@ void PoseCorrectionNode::initTFs()
 
     // Set up AprilTag coordinate system to Image coordinate system, and vice versa (NOTE: we might need to change these)
     basis = tf2::Matrix3x3(-1.0, 0.0, 0.0, 0.0, -1.0, 0.0, 0.0, 0.0, 1.0); // flip x and y, leave z
+    // basis = tf2::Matrix3x3(0.0, 0.0, 1.0, 0.0, 1.0, 0.0, -1.0, 0.0, 0.0); // rotate 90 deg about y
+    // basis = tf2::Matrix3x3(1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0); // identity
     imageToTag_.setIdentity();
     imageToTag_.setBasis(basis);
     tagToImage_ = imageToTag_.inverse();
 
     // Set up ROS coordinate system to image coordinate system, and vice versa (NOTE: we might need to change these)
-    basis = tf2::Matrix3x3(0.0, -1.0, 0.0, 0.0, 0.0, -1.0, 1.0, 0.0, 0.0);
+    // basis = tf2::Matrix3x3(0.0, -1.0, 0.0, 0.0, 0.0, -1.0, 1.0, 0.0, 0.0);
+    basis = tf2::Matrix3x3(1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0); // identity
+    // basis = tf2::Matrix3x3(1.0, 0.0, 0.0, 0.0, 0.0, -1.0, 0.0, 1.0, 0.0); // rotate 90 deg about x 
     rosToImage_.setIdentity();
     rosToImage_.setBasis(basis);
     imageToROS_ = rosToImage_.inverse();
@@ -564,7 +568,7 @@ void PoseCorrectionNode::initTFs()
         globalTagTransform.child_frame_id = tagIDtoFrame_[id];
         std::vector<_Float64> currTransform = globalTagPoseMap_[id];
         tf2::Quaternion globalRot; 
-        globalRot.setRPY(currTransform[4], currTransform[5], currTransform[6]);
+        globalRot.setRPY(currTransform[3], currTransform[4], currTransform[5]);
         globalTagTransform.transform.translation.x = currTransform[0];
         globalTagTransform.transform.translation.y = currTransform[1];
         globalTagTransform.transform.translation.z = currTransform[2];
@@ -621,7 +625,7 @@ void PoseCorrectionNode::computeTransform(geometry_msgs::msg::Transform & tf, in
     rosToTag.mult(imageToTag_, rosToImage_);
     tf2::Transform tagToRos = rosToTag.inverse();
 
-    // Transform the image pose from the left camrea sensor into ROS2's reference frame 
+    // Transform the image pose from the left camera sensor into ROS2's reference frame 
     tf2::Transform leftPoseTag;
     leftPoseTag.mult(poseImage, rosToTag);
     leftPoseTag.mult(tagToRos, leftPoseTag);
@@ -635,8 +639,14 @@ void PoseCorrectionNode::computeTransform(geometry_msgs::msg::Transform & tf, in
     tf2::Transform cameraMapPose;
     cameraMapPose.mult(globalTagPose, basePoseTag);
 
+    RCLCPP_INFO(get_logger(), "Calculated Pose:\nTranslation: X: %f, Y: %f, Z: %f \nRotation: X: %f, Y: %f, Z: %f, W: %f",
+    cameraMapPose.getOrigin().getX(), cameraMapPose.getOrigin().getY(), cameraMapPose.getOrigin().getZ(),
+    cameraMapPose.getRotation().getX(), cameraMapPose.getRotation().getY(), cameraMapPose.getRotation().getZ(),
+    cameraMapPose.getRotation().getW());
+
+
     // Reset the ZED pose 
-   resetZedPose(cameraMapPose);
+//    resetZedPose(cameraMapPose);
 }
 
 // Modified slightly from the ZED ArUco localization example code
@@ -693,7 +703,7 @@ bool PoseCorrectionNode::resetZedPose(tf2::Transform & new_pose)
 
     // Create service request from transform
     double r, p, y;
-    auto serviceRequest = std::make_shared<zed_msgs::srv::SetPose::Request>();
+    auto serviceRequest = std::make_shared<zed_interfaces::srv::SetPose::Request>();
     serviceRequest->pos[0] = new_pose.getOrigin().x();
     serviceRequest->pos[1] = new_pose.getOrigin().y();
     serviceRequest->pos[2] = new_pose.getOrigin().z();
@@ -715,12 +725,13 @@ bool PoseCorrectionNode::resetZedPose(tf2::Transform & new_pose)
                    << "' service not available, waiting...");
     }
 
-    using ServiceResponseFuture = rclcpp::Client<zed_msgs::srv::SetPose>::SharedFuture;
+    using ServiceResponseFuture = rclcpp::Client<zed_interfaces::srv::SetPose>::SharedFuture;
     auto response_received_callback = [this](ServiceResponseFuture future)
     {
         auto result = future.get();
         RCLCPP_INFO_STREAM(get_logger(), " * ZED Node replied to 'set_pose' call: " << result->message.c_str());
     };
+
 
     auto future_result = setPoseClient_->async_send_request(serviceRequest, response_received_callback);
 
