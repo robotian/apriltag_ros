@@ -106,10 +106,8 @@ class PoseCorrectionNode : public rclcpp::Node
         const OnSetParametersCallbackHandle::SharedPtr paramCallbackHandler_;
 
         // Apriltag family and detector pointers
-        
-        const std::string tagFamilyStr_;
+        std::string tagFamilyStr_;
         apriltag_family_t* tagFamily_;
-
         apriltag_detector_t* const tagDetector_;
 
         // parameter
@@ -212,7 +210,7 @@ class PoseCorrectionNode : public rclcpp::Node
          * @param tf - Transform msg for the closest tag
          * @param id - ID of the closest tag
          */
-        void computeTransform(geometry_msgs::msg::Transform & tf, int id);
+        void computeTransform(tf2::Transform & tf, int id);
     
         /**
          * @brief Callback that is triggered when parameters are changed. Pulled from AprilTagNode
@@ -250,8 +248,8 @@ PoseCorrectionNode::PoseCorrectionNode(const rclcpp::NodeOptions& options) : Nod
     transformBuffer_ = std::make_unique<tf2_ros::Buffer>(this->get_clock());
     transformListener_ = std::make_unique<tf2_ros::TransformListener>(*transformBuffer_);
 
-    // read-only parameters, grab the tag family and edge size used
-    const std::string tagFamilyStr = declare_parameter("family", "36h11", descr("tag family", true));
+    // grab the tag family and edge size used
+    tagFamilyStr_ = declare_parameter("family", "36h11", descr("tag family", true));
     tagEdgeSize_ = declare_parameter("size", 1.0, descr("default tag size", true));
 
     // Grab the tag ids, frame names, and sizes
@@ -348,15 +346,15 @@ PoseCorrectionNode::PoseCorrectionNode(const rclcpp::NodeOptions& options) : Nod
     }
 
     // Attempt to add tag family to the detector
-    if(tag_fun.count(tagFamilyStr))
+    if(tag_fun.count(tagFamilyStr_))
     {
-        tagFamily_ = tag_fun.at(tagFamilyStr).first();
-        tagFamilyDestructor_ = tag_fun.at(tagFamilyStr).second;
+        tagFamily_ = tag_fun.at(tagFamilyStr_).first();
+        tagFamilyDestructor_ = tag_fun.at(tagFamilyStr_).second;
         apriltag_detector_add_family(tagDetector_, tagFamily_);
     } 
     else
     {
-        throw std::runtime_error("Unsupported tag family: " + tagFamilyStr);
+        throw std::runtime_error("Unsupported tag family: " + tagFamilyStr_);
     }
 
     // Initialize transformations
@@ -484,9 +482,12 @@ void PoseCorrectionNode::onCamera(
     if(closestTagID != -1)
     {
         RCLCPP_INFO_STREAM(get_logger(), "Correcting pose using Tag ID: " << closestTagID);
+        tf2::Transform tagToHusky;
+        getTransformFromTf("tag" + tagFamilyStr_ + ":" + std::to_string(closestTagID), 
+        cameraName_ + "_camera_link", tagToHusky);
 
         // Compute the transform
-        computeTransform(tfToClosestTag.transform, closestTagID);
+        computeTransform(tagToHusky, closestTagID);
 
     }
 
@@ -498,6 +499,8 @@ void PoseCorrectionNode::onCamera(
 
     // Deallocate detections
     apriltag_detections_destroy(detections);
+
+
 
 }
 
@@ -554,7 +557,7 @@ void PoseCorrectionNode::initTFs()
     tagToImage_ = imageToTag_.inverse();
 
     // Set up ROS coordinate system to image coordinate system, and vice versa (NOTE: we might need to change these)
-    basis = tf2::Matrix3x3(0.0, -1.0, 0.0, 0.0, 0.0, -1.0, 1.0, 0.0, 0.0);
+    basis = tf2::Matrix3x3(0.0, 1.0, 0.0, 0.0, 0.0, -1.0, -1.0, 0.0, 0.0);
     // basis = tf2::Matrix3x3(1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0); // identity
     // basis = tf2::Matrix3x3(1.0, 0.0, 0.0, 0.0, 0.0, -1.0, 0.0, 1.0, 0.0); // rotate 90 deg about x 
     rosToImage_.setIdentity();
@@ -619,23 +622,16 @@ void PoseCorrectionNode::initTFs()
 
 }
 
-void PoseCorrectionNode::computeTransform(geometry_msgs::msg::Transform & tf, int id)
+void PoseCorrectionNode::computeTransform(tf2::Transform & tf, int id)
 {
 
     // NOTE - I need to practice more with transforms conceptually, so apologies if
     // any of the comments here are a bit misleading. It follows the process used in the 
     // ZED ArUco localization example. 
 
-    // Convert the transform msg to a tf2::Transform
-    tf2::Transform robotToTag;
-    tf2::Vector3 tagTranslation(tf.translation.x, tf.translation.y, tf.translation.z);
-    tf2::Quaternion tagRotation(tf.rotation.x, tf.rotation.y, tf.rotation.z, tf.rotation.w);
-    robotToTag.setOrigin(tagTranslation);
-    robotToTag.setRotation(tagRotation);
-
     // Change the reference frame (basis) from the tag to the camera
     tf2::Transform poseImage;
-    poseImage.mult(imageToTag_, robotToTag); // Transform the tag into the image's reference frame
+    poseImage.mult(imageToTag_, tf); // Transform the tag into the image's reference frame
     poseImage = poseImage.inverse(); // Change the transform from robot to tag --> tag to robot
 
     // Set up transforms between the tag's to ROS2's reference frames
@@ -657,29 +653,35 @@ void PoseCorrectionNode::computeTransform(geometry_msgs::msg::Transform & tf, in
     tf2::Transform cameraMapPose;
     cameraMapPose.mult(globalTagPose, basePoseTag);
 
-    RCLCPP_INFO(get_logger(), "Calculated Pose:\nTranslation: X: %f, Y: %f, Z: %f \nRotation: X: %f, Y: %f, Z: %f, W: %f",
-    cameraMapPose.getOrigin().getX(), cameraMapPose.getOrigin().getY(), cameraMapPose.getOrigin().getZ(),
-    cameraMapPose.getRotation().getX(), cameraMapPose.getRotation().getY(), cameraMapPose.getRotation().getZ(),
-    cameraMapPose.getRotation().getW());
+    RCLCPP_INFO(get_logger(), "Translation: [%f, %f, %f]", cameraMapPose.getOrigin().getX(), 
+    cameraMapPose.getOrigin().getY(), cameraMapPose.getOrigin().getZ());
+    double r, p, y;
+    cameraMapPose.getBasis().getRPY(r, p, y, 1);
+    RCLCPP_INFO(get_logger(), "Rotation: [%f, %f, %f]", r*RAD2DEG, p*RAD2DEG, y*RAD2DEG);
+
+    // RCLCPP_INFO(get_logger(), "Calculated Pose:\nTranslation: X: %f, Y: %f, Z: %f \nRotation: X: %f, Y: %f, Z: %f, W: %f",
+    // cameraMapPose.getOrigin().getX(), cameraMapPose.getOrigin().getY(), cameraMapPose.getOrigin().getZ(),
+    // cameraMapPose.getRotation().getX(), cameraMapPose.getRotation().getY(), cameraMapPose.getRotation().getZ(),
+    // cameraMapPose.getRotation().getW());
 
 
-    // // Set up vector of transformations to publish
-    // std::vector<geometry_msgs::msg::TransformStamped> tfs_vec;
+    // Set up vector of transformations to publish
+    std::vector<geometry_msgs::msg::TransformStamped> tfs_vec;
 
-    // geometry_msgs::msg::TransformStamped globalTestTf;
-    // globalTestTf.header.stamp = this->get_clock()->now();
-    // globalTestTf.header.frame_id = worldFrame_;
-    // globalTestTf.child_frame_id = "pose_correction_test";
-    // globalTestTf.transform.translation.x = cameraMapPose.getOrigin().getX();
-    // globalTestTf.transform.translation.y = cameraMapPose.getOrigin().getY();
-    // globalTestTf.transform.translation.z = cameraMapPose.getOrigin().getZ();
-    // globalTestTf.transform.rotation.x = cameraMapPose.getRotation().getX();
-    // globalTestTf.transform.rotation.y = cameraMapPose.getRotation().getY();
-    // globalTestTf.transform.rotation.z = cameraMapPose.getRotation().getZ();
-    // globalTestTf.transform.rotation.w = cameraMapPose.getRotation().getW();
-    // tfs_vec.push_back(globalTestTf);
+    geometry_msgs::msg::TransformStamped globalTestTf;
+    globalTestTf.header.stamp = this->get_clock()->now();
+    globalTestTf.header.frame_id = worldFrame_;
+    globalTestTf.child_frame_id = "pose_correction_test";
+    globalTestTf.transform.translation.x = cameraMapPose.getOrigin().getX();
+    globalTestTf.transform.translation.y = cameraMapPose.getOrigin().getY();
+    globalTestTf.transform.translation.z = cameraMapPose.getOrigin().getZ();
+    globalTestTf.transform.rotation.x = cameraMapPose.getRotation().getX();
+    globalTestTf.transform.rotation.y = cameraMapPose.getRotation().getY();
+    globalTestTf.transform.rotation.z = cameraMapPose.getRotation().getZ();
+    globalTestTf.transform.rotation.w = cameraMapPose.getRotation().getW();
+    tfs_vec.push_back(globalTestTf);
 
-    // tfBroadcaster_.sendTransform(tfs_vec);
+    tfBroadcaster_.sendTransform(tfs_vec);
     // Reset the ZED pose 
 //    resetZedPose(cameraMapPose);
 }
@@ -698,12 +700,12 @@ bool PoseCorrectionNode::getTransformFromTf(
     transformBuffer_->canTransform(
       targetFrame, sourceFrame, TIMEZERO_ROS, 1000ms,
       &msg);
-    RCLCPP_INFO_STREAM(
-      get_logger(), "[getTransformFromTf] canTransform '"
-        << targetFrame.c_str() << "' -> '"
-        << sourceFrame.c_str()
-        << "':" << msg.c_str());
-    std::this_thread::sleep_for(3ms);
+    // RCLCPP_INFO_STREAM(
+    //   get_logger(), "[getTransformFromTf] canTransform '"
+    //     << targetFrame.c_str() << "' -> '"
+    //     << sourceFrame.c_str()
+    //     << "':" << msg.c_str());
+    // std::this_thread::sleep_for(3ms);
 
     transf_msg =
       transformBuffer_->lookupTransform(targetFrame, sourceFrame, TIMEZERO_ROS, 1s);
@@ -721,13 +723,13 @@ bool PoseCorrectionNode::getTransformFromTf(
   double r, p, y;
   out_tr.getBasis().getRPY(r, p, y, 1);
 
-  RCLCPP_INFO(
-    get_logger(),
-    "[getTransformFromTf] '%s' -> '%s': \n\t[%.3f,%.3f,%.3f] - "
-    "[%.3f°,%.3f°,%.3f°]",
-    sourceFrame.c_str(), targetFrame.c_str(), out_tr.getOrigin().x(),
-    out_tr.getOrigin().y(), out_tr.getOrigin().z(), r * RAD2DEG,
-    p * RAD2DEG, y * RAD2DEG);
+//   RCLCPP_INFO(
+//     get_logger(),
+//     "[getTransformFromTf] '%s' -> '%s': \n\t[%.3f,%.3f,%.3f] - "
+//     "[%.3f°,%.3f°,%.3f°]",
+//     sourceFrame.c_str(), targetFrame.c_str(), out_tr.getOrigin().x(),
+//     out_tr.getOrigin().y(), out_tr.getOrigin().z(), r * RAD2DEG,
+//     p * RAD2DEG, y * RAD2DEG);
 
   return true;
 }
