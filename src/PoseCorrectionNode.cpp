@@ -548,7 +548,7 @@ void PoseCorrectionNode::initTFs()
     tf2::Matrix3x3 basis;
 
     // Set up AprilTag coordinate system to Image coordinate system, and vice versa (NOTE: we might need to change these)
-    basis = tf2::Matrix3x3(1.0, 0.0, 0.0, 0.0, -1.0, 0.0, 0.0, 0.0, -1.0); 
+    basis = tf2::Matrix3x3(1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, -1.0); 
     imageToTag_.setIdentity();
     imageToTag_.setBasis(basis);
     tagToImage_ = imageToTag_.inverse();
@@ -663,23 +663,23 @@ void PoseCorrectionNode::computeTransform(geometry_msgs::msg::Transform & tf, in
     cameraMapPose.getRotation().getW());
 
 
-    // Set up vector of transformations to publish
-    std::vector<geometry_msgs::msg::TransformStamped> tfs_vec;
+    // // Set up vector of transformations to publish
+    // std::vector<geometry_msgs::msg::TransformStamped> tfs_vec;
 
-    geometry_msgs::msg::TransformStamped globalTestTf;
-    globalTestTf.header.stamp = this->get_clock()->now();
-    globalTestTf.header.frame_id = worldFrame_;
-    globalTestTf.child_frame_id = "pose_correction_test";
-    globalTestTf.transform.translation.x = cameraMapPose.getOrigin().getX();
-    globalTestTf.transform.translation.y = cameraMapPose.getOrigin().getY();
-    globalTestTf.transform.translation.z = cameraMapPose.getOrigin().getZ();
-    globalTestTf.transform.rotation.x = cameraMapPose.getRotation().getX();
-    globalTestTf.transform.rotation.y = cameraMapPose.getRotation().getY();
-    globalTestTf.transform.rotation.z = cameraMapPose.getRotation().getZ();
-    globalTestTf.transform.rotation.w = cameraMapPose.getRotation().getW();
-    tfs_vec.push_back(globalTestTf);
+    // geometry_msgs::msg::TransformStamped globalTestTf;
+    // globalTestTf.header.stamp = this->get_clock()->now();
+    // globalTestTf.header.frame_id = worldFrame_;
+    // globalTestTf.child_frame_id = "pose_correction_test";
+    // globalTestTf.transform.translation.x = cameraMapPose.getOrigin().getX();
+    // globalTestTf.transform.translation.y = cameraMapPose.getOrigin().getY();
+    // globalTestTf.transform.translation.z = cameraMapPose.getOrigin().getZ();
+    // globalTestTf.transform.rotation.x = cameraMapPose.getRotation().getX();
+    // globalTestTf.transform.rotation.y = cameraMapPose.getRotation().getY();
+    // globalTestTf.transform.rotation.z = cameraMapPose.getRotation().getZ();
+    // globalTestTf.transform.rotation.w = cameraMapPose.getRotation().getW();
+    // tfs_vec.push_back(globalTestTf);
 
-    tfBroadcaster_.sendTransform(tfs_vec);
+    // tfBroadcaster_.sendTransform(tfs_vec);
     // Reset the ZED pose 
 //    resetZedPose(cameraMapPose);
 }
