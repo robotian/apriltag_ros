@@ -139,6 +139,7 @@ ament_target_dependencies(PoseCorrectionNode
     image_transport
     cv_bridge
     zed_interfaces
+    geometry_msgs
 )
 
 target_link_libraries(PoseCorrectionNode

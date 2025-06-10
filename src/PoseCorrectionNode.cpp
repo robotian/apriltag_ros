@@ -36,6 +36,10 @@
 #include <zed_interfaces/srv/set_pose.hpp>
 #include <Eigen/Dense>
 
+#define INFO(...) RCLCPP_INFO(get_logger(), __VA_ARGS__)
+#define WARN(...) RCLCPP_WARN(get_logger(), __VA_ARGS__)
+#define FATAL(...) RCLCPP_FATAL(get_logger(), __VA_ARGS__)
+
 using Eigen::Vector3f;
 
 using namespace std::chrono_literals;
@@ -132,6 +136,8 @@ class PoseCorrectionNode : public rclcpp::Node
         const rclcpp::Publisher<apriltag_msgs::msg::AprilTagDetectionArray>::SharedPtr detectionPub_;
         tf2_ros::TransformBroadcaster tfBroadcaster_;
         tf2_ros::StaticTransformBroadcaster staticBroadcaster_;
+
+        rclcpp::Publisher<geometry_msgs::msg::PoseWithCovarianceStamped>::SharedPtr posePub_;
 
         // Transform Buffer and Listener
         std::shared_ptr<tf2_ros::Buffer> transformBuffer_{nullptr};
@@ -365,6 +371,9 @@ PoseCorrectionNode::PoseCorrectionNode(const rclcpp::NodeOptions& options) : Nod
     // Create service client
     setPoseClient_ = create_client<zed_interfaces::srv::SetPose>("zed_node/set_pose");
 
+    // Create Pose Publisher
+    posePub_ = create_publisher<geometry_msgs::msg::PoseWithCovarianceStamped>("set_pose", 10);
+
 }
 
 PoseCorrectionNode::~PoseCorrectionNode()
@@ -380,6 +389,8 @@ void PoseCorrectionNode::onCamera(
     const sensor_msgs::msg::CameraInfo::ConstSharedPtr & camInfo
 )
 {
+
+    // INFO("### Starting onCamera!");
     // camera intrinsics for rectified images
     const std::array<double, 4> intrinsics = {camInfo->p[0], camInfo->p[5], camInfo->p[2], camInfo->p[6]};
 
@@ -399,10 +410,13 @@ void PoseCorrectionNode::onCamera(
     // create a struct of the image
     image_u8_t im{imgUint8.cols, imgUint8.rows, imgUint8.cols, imgUint8.data};
 
+    // INFO("### Attempting to detect tags....");
     // Detect apriltags (must be mutually exclusive)
     mutex_.lock();
     zarray_t* detections = apriltag_detector_detect(tagDetector_, &im);
     mutex_.unlock();
+    // INFO("### Tag Detection Process finished!");
+
 
     // Set up detections message
     apriltag_msgs::msg::AprilTagDetectionArray detectionsMsg;
@@ -421,9 +435,11 @@ void PoseCorrectionNode::onCamera(
     int closestTagID = -1;
 
     // LINK - tag detection
+    // INFO("### Looping Through detections...");
     for(int i = 0; i < zarray_size(detections); i++)
     {
         // Grab the current detection
+        // INFO("### Grabbing detection %d!", i);
         apriltag_detection_t* currDetection;
         zarray_get(detections, i, &currDetection);
 
@@ -442,6 +458,8 @@ void PoseCorrectionNode::onCamera(
             continue;
 
         // Grab the detection
+        // INFO("### Copying detection %d into message!", i);
+
         apriltag_msgs::msg::AprilTagDetection tagDetection;
         tagDetection.family = std::string(currDetection->family->name);
         tagDetection.id = currDetection->id;
@@ -456,6 +474,7 @@ void PoseCorrectionNode::onCamera(
         // If calibrated, then estimate the pose of the tag
         if(calibrated)
         {
+            // INFO("### Estimating pose of detection %d!", i);
             geometry_msgs::msg::TransformStamped tf;
             tf.header = img->header;
             int currTagID = currDetection->id;
@@ -466,6 +485,8 @@ void PoseCorrectionNode::onCamera(
             tf.transform = estimatePose_(currDetection, intrinsics, size);
             transformsToTags.push_back(tf);
 
+            // INFO("### Determining if tag %d is closest!", i);
+
             // Calculate the length of the translation, and determine if its the closest tag
             Vector3f transVec(tf.transform.translation.x, tf.transform.translation.y, tf.transform.translation.z);
             double tagDist = transVec.norm();
@@ -475,6 +496,7 @@ void PoseCorrectionNode::onCamera(
                 tfToClosestTag = tf;
                 closestTagID = currDetection->id;
             }
+
         }
         else
         {
@@ -484,13 +506,17 @@ void PoseCorrectionNode::onCamera(
 
     }
 
+    // INFO("### Publishing detections!");
 
     // Publish detections
     detectionPub_->publish(detectionsMsg);
 
+    // INFO("### Broadcasting Transforms!");
+
     // Broadcast transforms
     tfBroadcaster_.sendTransform(transformsToTags);
 
+    // INFO("### Deallocating Detections!");
     // Deallocate detections
     apriltag_detections_destroy(detections);
 
@@ -510,7 +536,7 @@ void PoseCorrectionNode::onCamera(
         // RCLCPP_INFO(get_logger(), "####### End DEBUG #######");
 
 
-
+        // INFO("### Correcting Pose!");
 
 
         // getTransformFromTf("tag" + tagFamilyStr_ + ":" + std::to_string(closestTagID), 
@@ -593,37 +619,6 @@ void PoseCorrectionNode::initTFs()
     imageToROS_ = rosToImage_.inverse();
 
 
-    // // Basis for the apriltag frame expressed in the camera's reference frame
-    // basis = tf2::Matrix3x3(-1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, -1.0, 0.0);
-    // apriltagToCam_.setIdentity();
-    // apriltagToCam_.setBasis(basis);
-    // camToApriltag_ = apriltagToCam_.inverse();
-
-    // basis = tf2::Matrix3x3(0.0, 1.0, 0.0, 0.0, 0.0, 1.0, -1.0, 0.0, 0.0);
-    // camToRos_.setIdentity();
-    // camToRos_.setBasis(basis);
-    // rosToCam_ = camToRos_.inverse();
-
-    // DEBUG
-    // double r, p, y;
-    // imageToTag_.getBasis().getRPY(r, p, y);
-    // RCLCPP_ERROR(
-    //   get_logger(), "imageToTag_: %.3f°,%.3f°,%.3f°", r * RAD2DEG,
-    //   p * RAD2DEG, y * RAD2DEG);
-    //   tagToImage_.getBasis().getRPY(r, p, y);
-    // RCLCPP_ERROR(
-    //   get_logger(), "tagToImage_: %.3f°,%.3f°,%.3f°", r * RAD2DEG,
-    //   p * RAD2DEG, y * RAD2DEG);
-    //   rosToImage_.getBasis().getRPY(r, p, y);
-    // RCLCPP_ERROR(
-    //   get_logger(), "rosToImage_: %.3f°,%.3f°,%.3f°", r * RAD2DEG,
-    //   p * RAD2DEG, y * RAD2DEG);
-    //   imageToROS_.getBasis().getRPY(r, p, y);
-    // RCLCPP_ERROR(
-    //   get_logger(), "imageToROS_: %.3f°,%.3f°,%.3f°", r * RAD2DEG,
-    //   p * RAD2DEG, y * RAD2DEG);
-
-
 
     for(int64_t id : tagIDs_)
     {
@@ -672,24 +667,11 @@ void PoseCorrectionNode::initTFs()
 // LINK - compute transform
 void PoseCorrectionNode::computeTransform(tf2::Transform & tf, int id)
 {
+
+    // INFO("### Calculating transformations!");
+
     // Change the reference frame (basis) from the tag to the camera
     tf2::Transform poseImage = tf;
-    // poseImage.mult(imageToTag_, tf); // Transform the tag into the image's reference frame
-    // poseImage = poseImage.inverse(); // Change the transform from robot to tag --> tag to robot
-
-    // // Set up transforms between the tag's to ROS2's reference frames
-    // tf2::Transform rosToTag;
-    // rosToTag.mult(imageToTag_, rosToImage_);
-    // tf2::Transform tagToRos = rosToTag.inverse();
-
-    // // Transform the image pose from the left camera sensor into ROS2's reference frame 
-    // tf2::Transform leftPoseTag;
-    // leftPoseTag.mult(poseImage, rosToTag);
-    // leftPoseTag.mult(tagToRos, leftPoseTag);
-
-    // // Transform the camera base to ROS2 coordinates with respect to the marker
-    // tf2::Transform basePoseTag;
-    // basePoseTag.mult(leftPoseTag, camLeftToBase_);
 
     // Get the camera pose in the ROS2 world
     tf2::Transform globalTagPose = tagTransformMap_[tagIDtoFrame_[id]];
@@ -702,27 +684,6 @@ void PoseCorrectionNode::computeTransform(tf2::Transform & tf, int id)
     coordAlign.setIdentity();
     coordAlign.setBasis(basis);
     cameraMapPose.mult(coordAlign.inverse(), cameraMapPose);
-
-
-    // RCLCPP_INFO(get_logger(), "Translation: [%f, %f, %f]", cameraMapPose.getOrigin().getX(), 
-    // cameraMapPose.getOrigin().getY(), cameraMapPose.getOrigin().getZ());
-    // double r, p, y;
-    // cameraMapPose.getBasis().getRPY(r, p, y, 1);
-    // RCLCPP_INFO(get_logger(), "Rotation: [%f, %f, %f]", r*RAD2DEG, p*RAD2DEG, y*RAD2DEG);
-
-    // RCLCPP_INFO(get_logger(), "Calculated Pose:\nTranslation: X: %f, Y: %f, Z: %f \nRotation: X: %f, Y: %f, Z: %f, W: %f",
-    // cameraMapPose.getOrigin().getX(), cameraMapPose.getOrigin().getY(), cameraMapPose.getOrigin().getZ(),
-    // cameraMapPose.getRotation().getX(), cameraMapPose.getRotation().getY(), cameraMapPose.getRotation().getZ(),
-    // cameraMapPose.getRotation().getW());
-
-    // tf2::Transform correctedGlobalCamPose;
-    // tf2::Transform rotCorrection;
-    // rotCorrection.setIdentity();
-    // rotCorrection.setBasis(tf2::Matrix3x3(1.0, 0.0, 0.0, 0.0, -1.0, 0.0, 0.0, 0.0, -1.0)); // Rotate globally around x by 180 deg
-    // // rotCorrection.setBasis(tf2::Matrix3x3(-1.0, 0.0, 0.0, -1.0, 0.0, 0.0, 0.0, 0.0, 1.0)); // Rotate globally around z by 180 deg
-    // cameraMapPose.mult(rotCorrection, cameraMapPose);
-
-    // cameraMapPose.mult(rotCorrection, cameraMapPose);
 
     // Set up vector of transformations to publish
     std::vector<geometry_msgs::msg::TransformStamped> tfs_vec;
@@ -743,6 +704,7 @@ void PoseCorrectionNode::computeTransform(tf2::Transform & tf, int id)
     tf2::Transform out;
     getTransformFromTf("global_tag_to_robot", "map", out);
     out = out.inverse();
+    out.setRotation(out.getRotation().normalize());
     globalTestTf.header.stamp = this->get_clock()->now();
     globalTestTf.header.frame_id = "map";
     globalTestTf.child_frame_id = "pose_correction_test";
@@ -755,9 +717,23 @@ void PoseCorrectionNode::computeTransform(tf2::Transform & tf, int id)
     globalTestTf.transform.rotation.w = out.getRotation().getW();
     tfs_vec.push_back(globalTestTf);
 
+    // INFO("### Broadcasting global transforms!");
+
     tfBroadcaster_.sendTransform(tfs_vec);
+
+    geometry_msgs::msg::PoseWithCovarianceStamped poseMsg;
+    poseMsg.header = globalTestTf.header;
+    poseMsg.pose.pose.position.x = globalTestTf.transform.translation.x;
+    poseMsg.pose.pose.position.y = globalTestTf.transform.translation.y;
+    poseMsg.pose.pose.position.z = globalTestTf.transform.translation.z;
+    poseMsg.pose.pose.orientation.w = globalTestTf.transform.rotation.w;
+    poseMsg.pose.pose.orientation.x = globalTestTf.transform.rotation.x;
+    poseMsg.pose.pose.orientation.y = globalTestTf.transform.rotation.y;
+    poseMsg.pose.pose.orientation.z = globalTestTf.transform.rotation.z;
+    posePub_->publish(poseMsg);
+
     // Reset the ZED pose 
-//    resetZedPose(out);
+    // resetZedPose(out);
 }
 
 // LINK - getTransformFromTf
@@ -824,6 +800,7 @@ bool PoseCorrectionNode::resetZedPose(tf2::Transform & new_pose)
     serviceRequest->orient[1] = p;
     serviceRequest->orient[2] = y; 
 
+
     while(!setPoseClient_->wait_for_service(1s))
     {
         if(!rclcpp::ok())
@@ -844,6 +821,8 @@ bool PoseCorrectionNode::resetZedPose(tf2::Transform & new_pose)
         RCLCPP_INFO_STREAM(get_logger(), " * ZED Node replied to 'set_pose' call: " << result->message.c_str());
     };
 
+    RCLCPP_INFO(get_logger(), "Resetting pose to:\n - Translation (X: %f, Y: %f, Z: %f)\n - Rotation (R: %f, P: %f, Y: %f)",
+    serviceRequest->pos[0], serviceRequest->pos[1], serviceRequest->pos[2], serviceRequest->orient[0], serviceRequest->orient[1], serviceRequest->orient[2]);
 
     auto future_result = setPoseClient_->async_send_request(serviceRequest, response_received_callback);
 
