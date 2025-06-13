@@ -159,6 +159,7 @@ class PoseCorrectionNode : public rclcpp::Node
         tf2::Transform rosToImage_;
         tf2::Transform tagToImage_;
         tf2::Transform imageToTag_;
+        tf2::Transform camCenterToBaseLink_;
 
 
         // tf2::Transform apriltagToCam_;
@@ -541,8 +542,10 @@ void PoseCorrectionNode::onCamera(
 
         // getTransformFromTf("tag" + tagFamilyStr_ + ":" + std::to_string(closestTagID), 
         // "husky1_camera_link", tagToHusky);
-        getTransformFromTf(cameraName_ + "_camera_center", "tag" + tagFamilyStr_ + ":" + std::to_string(closestTagID), tagToHusky);
-        getTransformFromTf("tag" + tagFamilyStr_ + ":" + std::to_string(closestTagID), cameraName_ + "_camera_center", tagToHusky);
+        // getTransformFromTf(cameraName_ + "_camera_center", "tag" + tagFamilyStr_ + ":" + std::to_string(closestTagID), tagToHusky);
+        // getTransformFromTf("tag" + tagFamilyStr_ + ":" + std::to_string(closestTagID), cameraName_ + "_camera_link", tagToHusky);
+        getTransformFromTf("tag" + tagFamilyStr_ + ":" + std::to_string(closestTagID), "base_link", tagToHusky);
+
 
 
         // Compute the transform
@@ -592,6 +595,16 @@ void PoseCorrectionNode::initTFs()
         "of the 'ZED State Publisher' node!", camBaseFrame.c_str(), camLeftFrame.c_str());
         exit(EXIT_FAILURE);
     }
+
+    // Get a transform between the center and base link to use when correcting the EKF pose 
+    tfOk = getTransformFromTf(cameraName_ + "_camera_center", "base_link", camCenterToBaseLink_);
+    if(!tfOk)
+    {
+        RCLCPP_ERROR(get_logger(), "Could not grab transform '%s' -> '%s', Please verify the parameters and the status "
+        "of the 'ZED State Publisher' node!", (cameraName_ + "_camera_link").c_str(), "base_link");
+        exit(EXIT_FAILURE);
+    }
+
 
     // double r, p, y;
     tf2::Matrix3x3 basis;
@@ -705,6 +718,7 @@ void PoseCorrectionNode::computeTransform(tf2::Transform & tf, int id)
     getTransformFromTf("global_tag_to_robot", "map", out);
     out = out.inverse();
     out.setRotation(out.getRotation().normalize());
+    // out.mult(camCenterToBaseLink_.inverse(), out);
     globalTestTf.header.stamp = this->get_clock()->now();
     globalTestTf.header.frame_id = "map";
     globalTestTf.child_frame_id = "pose_correction_test";
