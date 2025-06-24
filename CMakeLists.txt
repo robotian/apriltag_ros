@@ -43,8 +43,6 @@ find_package(Eigen3 REQUIRED NO_MODULE)
 find_package(Threads REQUIRED)
 find_package(OpenCV REQUIRED COMPONENTS core calib3d)
 find_package(apriltag 3.2 REQUIRED)
-find_package(zed_msgs REQUIRED)
-find_package(zed_interfaces REQUIRED)
 find_package(tf2 REQUIRED)
 find_package(tf2_geometry_msgs REQUIRED)
 
@@ -138,7 +136,6 @@ ament_target_dependencies(PoseCorrectionNode
     tf2_ros
     image_transport
     cv_bridge
-    zed_interfaces
     geometry_msgs
 )
 
