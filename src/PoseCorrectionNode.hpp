@@ -150,5 +150,15 @@ private:
      * @return tf2::Transform - a transform created using a weighted average of each of the tags
      */
     tf2::Transform averageTransforms(std::vector<detectionPose>& globalTransformVec);
+
+    /**
+     * @brief Function to return the weighted average of quaternions using the Markley Method
+     * 
+     * @param quats - Vector of quaternion objects
+     * @param weights - Vector of weights
+     * 
+     * @return Eigen::Quaterniond - The weighted average quaternion from the Markley method
+     */
+    Eigen::Quaterniond weightedAverageQuaternion(std::vector<Eigen::Quaterniond>& quats, std::vector<double>& weights);
 };
 RCLCPP_COMPONENTS_REGISTER_NODE(PoseCorrectionNode)

@@ -10,6 +10,7 @@
  */
 
 #include "PoseCorrectionNode.hpp"
+#include <cmath>
 
 #define INFO(...) RCLCPP_INFO(get_logger(), __VA_ARGS__)
 #define WARN(...) RCLCPP_WARN(get_logger(), __VA_ARGS__)
@@ -520,14 +521,61 @@ void PoseCorrectionNode::onCamera(
 
     }
 
+    // LINK - averageTransforms 
     tf2::Transform PoseCorrectionNode::averageTransforms(std::vector<detectionPose>& transformVec)
     {
+        // Initialize weights as the inverse of the squared distance (Distant tags fall off faster)
+        std::vector<double> weightVec;
+        double weightSum = 0;
+        for(int i = 0; i < transformVec.size(); i++)
+        {
+            tf2::Transform local = transformVec[i].localTransform;
+            Vector3f transVec(local.getOrigin().getX(), local.getOrigin().getY(), local.getOrigin().getZ());
+            double tagDist = transVec.norm();
+            double weight = 1 / std::pow(tagDist, 2);
+            weightVec.push_back(weight);
+            weightSum += weight;
+        }
 
-        INFO("Still need to do this part!");
+        // Normalize weights
+        for(int i = 0; i < weightVec.size(); i++)
+        {
+            weightVec[i] /= weightSum;
+        }
 
-        tf2::Transform tf = transformVec[0].globalTransform;
+        // Perform weighted average of translation
+        Eigen::Vector3d transSum(0, 0, 0);
+        for(int i = 0; i < transformVec.size(); i++)
+        {
+            // Grab weight and transform for readability
+            double w_i = weightVec[i]; 
+            tf2::Transform currTf = transformVec[i].globalTransform;
+            
+            // Sum our transform vector using eigen
+            Eigen::Vector3d currTrans(w_i * currTf.getOrigin().getX(), w_i * currTf.getOrigin.getY(), w_i * currTF.getOrigin.getZ());
+            transSum += currTrans;
+        }
 
-        return tf;
+        // Perform weighted average of rotation
+
+
+
+    }
+
+    Eigen::Quaterniond PoseCorrectionNode::weightedAverageQuaternion(std::vector<Eigen::Quaterniond>& quats, std::vector<double>& weights)
+    {
+        Eigen::Quaterniond quaternionOut;
+        if(quats.size() == 0 || weights.size() == 0)
+        {
+            throw std::invalid_argument("Quaternion list or weight list has no entries!");
+        }
+
+        Eigen::Matrix4d accumulator;
+         
+
+        //TODO finish this using the Markley method
+
+
 
     }
 
