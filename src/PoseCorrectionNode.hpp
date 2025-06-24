@@ -22,6 +22,14 @@
 #include <Eigen/Dense>
 
 
+struct detectionPose
+{
+     int id;
+     apriltag_detection_t* detection;
+     tf2::Transform localTransform; // Transform tag -> robot
+     tf2::Transform globalTransform; // Transform map -> robot
+};
+
 // LINK - Class Definition
 //Class to encompass the apriltag detection and pose correction
 class PoseCorrectionNode : public rclcpp::Node {
@@ -47,6 +55,7 @@ private:
     std::unordered_map<int, std::string> tagFrames_;
     std::unordered_map<int, double> tagSizes_;
     std::vector<long int> tagIDs_;
+    double maxTagDist_;
 
     // Maps of tag IDs to pose and frame name
     std::unordered_map<int64_t, std::vector<_Float64>> globalTagPoseMap_;
@@ -81,14 +90,10 @@ private:
     tf2::Transform imageToTag_;
     tf2::Transform camCenterToBaseLink_;
 
-
-    // tf2::Transform apriltagToCam_;
-    // tf2::Transform camToApriltag_;
-    // tf2::Transform camToRos_;
-    // tf2::Transform rosToCam_;
-
     // Map of tag frames to transforms
     std::unordered_map<std::string, tf2::Transform> tagTransformMap_;
+
+    std::unordered_map<int, apriltag_detection_t*> detectionMap_;
 
 
     /**
@@ -125,8 +130,9 @@ private:
          *
          * @param tf - Transform msg for the closest tag
          * @param id - ID of the closest tag
+         * @return tf2::Transform - the transform from map to the robot using the tag
          */
-    void computeTransform(tf2::Transform& tf, int id);
+    tf2::Transform computeTransform(tf2::Transform& tf, int id);
 
     /**
          * @brief Callback that is triggered when parameters are changed. Pulled from AprilTagNode
@@ -135,5 +141,14 @@ private:
          * @return rcl_interfaces::msg::SetParametersResult
          */
     rcl_interfaces::msg::SetParametersResult onParameter(const std::vector<rclcpp::Parameter>& parameters);
+
+    /**
+     * @brief Takes a vector of structs of global transforms for observed tags and returns a single transform as the 
+     * product of weighted average.
+     * @param globalTransformVec - A vector of detectionPose structs created after computeTransform calculates the global transform 
+     * of the robot for each tag.
+     * @return tf2::Transform - a transform created using a weighted average of each of the tags
+     */
+    tf2::Transform averageTransforms(std::vector<detectionPose>& globalTransformVec);
 };
 RCLCPP_COMPONENTS_REGISTER_NODE(PoseCorrectionNode)
