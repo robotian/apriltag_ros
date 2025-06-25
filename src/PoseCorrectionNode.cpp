@@ -526,8 +526,9 @@ void PoseCorrectionNode::onCamera(
     {
         // Initialize weights as the inverse of the squared distance (Distant tags fall off faster)
         std::vector<double> weightVec;
+        std::vector<Eigen::Quaterniond> quaternionVec;
         double weightSum = 0;
-        for(int i = 0; i < transformVec.size(); i++)
+        for(long unsigned int i = 0; i < transformVec.size(); i++)
         {
             tf2::Transform local = transformVec[i].localTransform;
             Vector3f transVec(local.getOrigin().getX(), local.getOrigin().getY(), local.getOrigin().getZ());
@@ -538,45 +539,91 @@ void PoseCorrectionNode::onCamera(
         }
 
         // Normalize weights
-        for(int i = 0; i < weightVec.size(); i++)
+        for(long unsigned int i = 0; i < weightVec.size(); i++)
         {
             weightVec[i] /= weightSum;
         }
 
-        // Perform weighted average of translation
+        // Perform weighted average of translation, break out quaternions into a separate vector
         Eigen::Vector3d transSum(0, 0, 0);
-        for(int i = 0; i < transformVec.size(); i++)
+        for(long unsigned int i = 0; i < transformVec.size(); i++)
         {
             // Grab weight and transform for readability
             double w_i = weightVec[i]; 
             tf2::Transform currTf = transformVec[i].globalTransform;
             
             // Sum our transform vector using eigen
-            Eigen::Vector3d currTrans(w_i * currTf.getOrigin().getX(), w_i * currTf.getOrigin.getY(), w_i * currTF.getOrigin.getZ());
+            Eigen::Vector3d currTrans(w_i * currTf.getOrigin().getX(), w_i * currTf.getOrigin().getY(), w_i * currTf.getOrigin().getZ());
             transSum += currTrans;
+
+            // Convert quaternion into a different type and add it to a vector
+            Eigen::Quaterniond q(currTf.getRotation().getW(), currTf.getRotation().getX(), currTf.getRotation().getY(), currTf.getRotation().getZ());
+            quaternionVec.push_back(q);
         }
 
-        // Perform weighted average of rotation
+        // Perform weighted average of rotations
+        Eigen::Quaterniond avgQuaternion = weightedAverageQuaternion(quaternionVec, weightVec);
 
+        // Convert back to tf2::Transform
+        tf2::Transform finalTf;
+        finalTf.setOrigin(tf2::Vector3(transSum(0), transSum(1), transSum(2)));
+        finalTf.setRotation(tf2::Quaternion(avgQuaternion.x(), avgQuaternion.y(), avgQuaternion.z(), avgQuaternion.w()));
+
+        return finalTf;
 
 
     }
 
+    // LINK - weightedAverageQuaternion
     Eigen::Quaterniond PoseCorrectionNode::weightedAverageQuaternion(std::vector<Eigen::Quaterniond>& quats, std::vector<double>& weights)
     {
+        // This function is an adaptation of tbirdal's algorithm for this process, based on Markley et al. 2007
+        // https://tbirdal.blogspot.com/2019/10/i-allocate-this-post-to-providing.html
+
         Eigen::Quaterniond quaternionOut;
         if(quats.size() == 0 || weights.size() == 0)
         {
             throw std::invalid_argument("Quaternion list or weight list has no entries!");
         }
+        if(quats.size() != weights.size())
+        {
+            throw std::invalid_argument("Quaternion list and weight list have different lengths!");
+        }
 
-        Eigen::Matrix4d accumulator;
+        // Build matrix of the outer products of the quaternion by its weight
+        double totalWeight = 0;
+        Eigen::Matrix4d accumulator = Eigen::Matrix4d::Zero();
+        for(long unsigned int i = 0; i < quats.size(); i++)
+        {
+            // Break quaternion into a vector 
+            Eigen::Vector4d q(quats[i].w(), quats[i].x(), quats[i].y(), quats[i].z());
+            q.normalize();
+
+            // Correct sign to have everything on the same hemisphere
+            if(q(0) < 0)
+            {
+                q = -q;
+            }
+
+            // Calculate the outer product, scale by weight, and add to matrix
+            accumulator += weights[i] * (q * q.transpose());
+            totalWeight += weights[i];
+        }
+
+        // Normalize the matrix
+        accumulator /= totalWeight;
+
+        // Solve for the eigenvalues
+        Eigen::SelfAdjointEigenSolver<Eigen::Matrix4d> eigensolver(accumulator);
+        if(eigensolver.info() != Eigen::Success)
+        {
+            throw std::runtime_error("Failed to solve for eigen values!");
+        }
          
+        // Grab the eigen vector for the largest eigenvalue
+        Eigen::Vector4d average = eigensolver.eigenvectors().col(3);
 
-        //TODO finish this using the Markley method
-
-
-
+        return Eigen::Quaterniond(average(0), average(1), average(2), average(3));
     }
 
     // LINK - getTransformFromTf
