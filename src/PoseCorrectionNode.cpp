@@ -251,9 +251,18 @@ void PoseCorrectionNode::onCamera(
     std::vector<geometry_msgs::msg::TransformStamped> transformsToTags;
     std::vector<int> consideredTagIDs_;
 
+    // Don't waste any time if we don't have any tags
+    if(zarray_size(detections) == 0)
+    {
+        apriltag_detections_destroy(detections);
+        detectionMap_.clear();
+        return;
+    }
+
     // LINK - tag detection
     for(int i = 0; i < zarray_size(detections); i++) 
     {
+
         // Grab the current detection
         apriltag_detection_t* currDetection;
         zarray_get(detections, i, &currDetection);
@@ -311,6 +320,13 @@ void PoseCorrectionNode::onCamera(
         }
     }
 
+    // Don't waste any effort if we haven't found any tags within our max consideration distance
+    if(consideredTagIDs_.size() == 0)
+    {
+        apriltag_detections_destroy(detections);
+        detectionMap_.clear();
+        return;
+    }
 
     // Publish detections
     detectionPub_->publish(detectionsMsg);
@@ -320,6 +336,8 @@ void PoseCorrectionNode::onCamera(
     tfBroadcaster_.sendTransform(transformsToTags);
 
     std::vector<detectionPose> transformVec;
+
+    INFO("Tags detected, correcting pose!");
 
     // LINK - process pose from each tag
     for(auto id : consideredTagIDs_)
@@ -356,6 +374,7 @@ void PoseCorrectionNode::onCamera(
     poseMsg.pose.pose.orientation.y = globalTf.getRotation().getY();
     poseMsg.pose.pose.orientation.z = globalTf.getRotation().getZ();
     posePub_->publish(poseMsg);
+    
 
     // Cleanup
     apriltag_detections_destroy(detections);
@@ -570,8 +589,6 @@ void PoseCorrectionNode::onCamera(
         finalTf.setRotation(tf2::Quaternion(avgQuaternion.x(), avgQuaternion.y(), avgQuaternion.z(), avgQuaternion.w()));
 
         return finalTf;
-
-
     }
 
     // LINK - weightedAverageQuaternion
