@@ -85,7 +85,7 @@ PoseCorrectionNode::PoseCorrectionNode(const rclcpp::NodeOptions& options) : Nod
                                                                                  std::bind(&PoseCorrectionNode::onCamera, this, std::placeholders::_1, std::placeholders::_2),
                                                                                  declare_parameter("image_transport", "raw", descr({}, true)),
                                                                                  rmw_qos_profile_sensor_data)),
-                                                                             detectionPub_(create_publisher<apriltag_msgs::msg::AprilTagDetectionArray>("apriltag_detections", rclcpp::QoS(1))),
+                                                                             detectionPub_(create_publisher<apriltag_msgs::msg::AprilTagDetectionArray>("detections", rclcpp::QoS(1))),
                                                                              tfBroadcaster_(this),
                                                                              staticBroadcaster_(this)
 {
@@ -114,6 +114,7 @@ PoseCorrectionNode::PoseCorrectionNode(const rclcpp::NodeOptions& options) : Nod
 
     cameraName_ = declare_parameter("camera_name", "", descr("Camera name for TF lookup", true));
     worldFrame_ = declare_parameter("world_frame_id", "", descr("World frame ID ", true));
+    run_every_n_frames = declare_parameter("run_every_n_frames", 1, descr("Runs the pose correction every n frames" , true));
 
 
     // Grab the global poses for each tag
@@ -199,6 +200,7 @@ PoseCorrectionNode::PoseCorrectionNode(const rclcpp::NodeOptions& options) : Nod
 
     // Create Pose Publisher
     posePub_ = create_publisher<geometry_msgs::msg::PoseWithCovarianceStamped>("set_pose", 10);
+    dockingPub_ = create_publisher<geometry_msgs::msg::PoseStamped>("detected_dock_pose", 10);
 }
 
 PoseCorrectionNode::~PoseCorrectionNode()
@@ -306,6 +308,36 @@ void PoseCorrectionNode::onCamera(
             tf.transform = estimatePose_(currDetection, intrinsics, size);
 
 
+            // LINK - Publish docking pose
+            if(currDetection->id == 1 || currDetection->id == 2)
+            {
+                // Convert to a tf2::Transform
+                tf2::Vector3 dockTrans(tf.transform.translation.x, tf.transform.translation.y, tf.transform.translation.z);
+                tf2::Quaternion dockRot(tf.transform.rotation.x, tf.transform.rotation.y, tf.transform.rotation.z, tf.transform.rotation.w);
+                tf2::Transform dockTagTf;
+                dockTagTf.setOrigin(dockTrans);
+                dockTagTf.setRotation(dockRot);
+
+                // // Change basis of tag to what is expected
+                // tf2::Matrix3x3 basis = tf2::Matrix3x3(0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0);
+                // tf2::Transform coordAlign;// aligns the coordinate frames of the detected tag to the known global tag position transform
+                // coordAlign.setIdentity();
+                // coordAlign.setBasis(basis);
+                // dockTagTf.mult(coordAlign, dockTagTf);
+
+                // Convert to pose message and publish
+                geometry_msgs::msg::PoseStamped dockMsg;
+                dockMsg.header = tf.header;
+                dockMsg.pose.position.x = dockTagTf.getOrigin().getX();
+                dockMsg.pose.position.y = dockTagTf.getOrigin().getY();
+                dockMsg.pose.position.z = dockTagTf.getOrigin().getZ();
+                dockMsg.pose.orientation.w = dockTagTf.getRotation().getW();
+                dockMsg.pose.orientation.x = dockTagTf.getRotation().getX();
+                dockMsg.pose.orientation.y = dockTagTf.getRotation().getY();
+                dockMsg.pose.orientation.z = dockTagTf.getRotation().getZ();
+                dockingPub_->publish(dockMsg);
+            }
+
             // Calculate the length of the translation, and determine if its the closest tag
             Vector3f transVec(tf.transform.translation.x, tf.transform.translation.y, tf.transform.translation.z);
             double tagDist = transVec.norm();
@@ -320,6 +352,13 @@ void PoseCorrectionNode::onCamera(
         }
     }
 
+    // Only run every 
+    if(detectionThrottle_++ != 0)
+    {
+        detectionThrottle_ %= run_every_n_frames;
+        return;
+    }
+
     // Don't waste any effort if we haven't found any tags within our max consideration distance
     if(consideredTagIDs_.size() == 0)
     {
@@ -330,7 +369,6 @@ void PoseCorrectionNode::onCamera(
 
     // Publish detections
     detectionPub_->publish(detectionsMsg);
-
 
     // Broadcast transforms
     tfBroadcaster_.sendTransform(transformsToTags);
@@ -374,7 +412,6 @@ void PoseCorrectionNode::onCamera(
     poseMsg.pose.pose.orientation.y = globalTf.getRotation().getY();
     poseMsg.pose.pose.orientation.z = globalTf.getRotation().getZ();
     posePub_->publish(poseMsg);
-    
 
     // Cleanup
     apriltag_detections_destroy(detections);
@@ -512,6 +549,8 @@ void PoseCorrectionNode::onCamera(
         globalTestTf.transform.rotation.z = cameraMapPose.getRotation().getZ();
         globalTestTf.transform.rotation.w = cameraMapPose.getRotation().getW();
         tfs_vec.push_back(globalTestTf);
+        tfBroadcaster_.sendTransform(tfs_vec);
+        tfs_vec.clear();
 
         // Use TF to transform the local transformation between the tag and robot into map -> robot
         tf2::Transform out;

@@ -70,7 +70,9 @@ private:
     tf2_ros::TransformBroadcaster tfBroadcaster_;
     tf2_ros::StaticTransformBroadcaster staticBroadcaster_;
 
+    // Pose Publishers
     rclcpp::Publisher<geometry_msgs::msg::PoseWithCovarianceStamped>::SharedPtr posePub_;
+    rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr dockingPub_;
 
     // Transform Buffer and Listener
     std::shared_ptr<tf2_ros::Buffer> transformBuffer_{nullptr};
@@ -92,8 +94,10 @@ private:
 
     // Map of tag frames to transforms
     std::unordered_map<std::string, tf2::Transform> tagTransformMap_;
-
     std::unordered_map<int, apriltag_detection_t*> detectionMap_;
+
+    int detectionThrottle_ = 0;
+    int run_every_n_frames = 10;
 
 
     /**
