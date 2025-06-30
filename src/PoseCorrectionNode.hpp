@@ -1,3 +1,15 @@
+/*
+ * Created on Thu May 01 2025
+ * Author: Austen Goddu, ajgoddu@mtu.edu
+ * Intelligent Robotics and System Optimization Laboratory
+ * Michigan Technological University
+ *
+ * Purpose: Runs composed with the ZED ROS2 Wrapper in order
+ * to detect AprilTags and use them to correct the pose of the global
+ * EKF. 
+ *
+ */
+
 #include "pose_estimation.hpp"
 #include <apriltag_msgs/msg/april_tag_detection.hpp>
 #include <apriltag_msgs/msg/april_tag_detection_array.hpp>
@@ -21,7 +33,7 @@
 // #include <zed_interfaces/srv/set_pose.hpp>
 #include <Eigen/Dense>
 
-
+// Struct with information about a pose used to calculate the weights in the weighted average
 struct detectionPose
 {
      int id;
