@@ -318,39 +318,6 @@ void PoseCorrectionNode::onCamera(
             const double size = tagSizes_.count(currTagID) ? tagSizes_.at(currTagID) : tagEdgeSize_;
             tf.transform = estimatePose_(currDetection, intrinsics, size);
 
-
-            // LINK - Publish docking pose
-            if(currDetection->id == 1 || currDetection->id == 2)
-            {
-                // Convert to a tf2::Transform
-                tf2::Vector3 dockTrans(tf.transform.translation.x, tf.transform.translation.y, tf.transform.translation.z);
-                tf2::Quaternion dockRot(tf.transform.rotation.x, tf.transform.rotation.y, tf.transform.rotation.z, tf.transform.rotation.w);
-                tf2::Transform dockTagTf;
-                dockTagTf.setOrigin(dockTrans);
-                dockTagTf.setRotation(dockRot);
-                dockTagTf = dockTagTf.inverse();
-                
-                // Define a quaternion for rotation (for some reason things are 90 degrees off)
-                // NOTE - If this doesn't work, just do it instead by asking TF to generate the transforms,
-                // they'll need to be published first
-                double r=0, p=-1.57, y=0;
-                tf2::Quaternion rotation;
-                rotation.setRPY(r, p, y);
-                dockTagTf.setRotation(rotation * dockTagTf.getRotation());
-
-                // Convert to pose message and publish
-                geometry_msgs::msg::PoseStamped dockMsg;
-                dockMsg.header = tf.header;
-                dockMsg.pose.position.x = dockTagTf.getOrigin().getX();
-                dockMsg.pose.position.y = dockTagTf.getOrigin().getY();
-                dockMsg.pose.position.z = dockTagTf.getOrigin().getZ();
-                dockMsg.pose.orientation.w = dockTagTf.getRotation().getW();
-                dockMsg.pose.orientation.x = dockTagTf.getRotation().getX();
-                dockMsg.pose.orientation.y = dockTagTf.getRotation().getY();
-                dockMsg.pose.orientation.z = dockTagTf.getRotation().getZ();
-                dockingPub_->publish(dockMsg);
-            }
-
             // Calculate the length of the translation, and determine if its the closest tag
             Vector3f transVec(tf.transform.translation.x, tf.transform.translation.y, tf.transform.translation.z);
             double tagDist = transVec.norm();
@@ -405,6 +372,34 @@ void PoseCorrectionNode::onCamera(
             pose.globalTransform = out;
             pose.localTransform = tagToHusky;
             transformVec.push_back(pose);
+
+            // LINK - Publish docking pose
+            if(id == 1 || id == 2)
+            {
+                // Convert to a tf2::Transform
+                // tf2::Vector3 dockTrans(out.transform.translation.x, out.transform.translation.y, out.transform.translation.z);
+                // tf2::Quaternion dockRot(out.transform.rotation.x, out.transform.rotation.y, out.transform.rotation.z, out.transform.rotation.w);
+                // tf2::Transform dockTagTf;
+                // dockTagTf.setOrigin(dockTrans);
+                // dockTagTf.setRotation(dockRot);
+                // // dockTagTf = dockTagTf.inverse();
+
+
+                // // Convert to pose message and publish
+                geometry_msgs::msg::PoseStamped dockMsg;                
+
+                dockMsg.header.stamp = this->get_clock()->now();
+                dockMsg.header.frame_id = "tag" + tagFamilyStr_ + ":" + std::to_string(id);
+                // dockMsg.pose.position.x = tagToHusky.getOrigin().getX();
+                // dockMsg.pose.position.y = tagToHusky.getOrigin().getY();
+                // dockMsg.pose.position.z = tagToHusky.getOrigin().getZ();
+                // dockMsg.pose.orientation.w = tagToHusky.getRotation().getW();
+                // dockMsg.pose.orientation.x = tagToHusky.getRotation().getX();
+                // dockMsg.pose.orientation.y = tagToHusky.getRotation().getY();
+                // dockMsg.pose.orientation.z = tagToHusky.getRotation().getZ();
+                dockingPub_->publish(dockMsg);
+            }
+
     }
 
     // Compute the weighted average of all global transforms from each detected tag
