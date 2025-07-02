@@ -249,7 +249,6 @@ void PoseCorrectionNode::onCamera(
     zarray_t* detections = apriltag_detector_detect(tagDetector_, &im);
     mutex_.unlock();
 
-
     // Set up detections message
     apriltag_msgs::msg::AprilTagDetectionArray detectionsMsg;
     detectionsMsg.header = img->header;
@@ -258,6 +257,10 @@ void PoseCorrectionNode::onCamera(
     if(profile_)
         timeprofile_display(tagDetector_->tp);
 
+
+    // Set up a pose message for docking
+    geometry_msgs::msg::PoseStamped dockingTagPose;
+    dockingTagPose.header = img->header;
 
     // Set up vector of transformations to publish
     std::vector<geometry_msgs::msg::TransformStamped> transformsToTags;
@@ -327,6 +330,34 @@ void PoseCorrectionNode::onCamera(
                 consideredTagIDs_.push_back(currDetection->id);
                 detectionMap_[currDetection->id] = currDetection;
             }
+            else
+            {
+                continue;
+            }
+
+            // LINK - Publish docking pose 1
+            //TODO allow setting the docking tag ids from configs
+            // if(currDetection->id == 1 || currDetection->id == 2)
+            // {
+            //     tf2::Quaternion q_orig, q_x_rot, q_y_rot, q_z_rot, q_x2_rot, q_new; 
+            //     tf2::convert(tf.transform.rotation, q_orig);
+            //     q_x_rot.setRPY(0, 0, 0);
+            //     q_z_rot.setRPY(0, 0, M_PI/2);
+            //     q_y_rot.setRPY(0, -M_PI/2, 0);
+            //     q_x2_rot.setRPY(M_PI/2, 0, 0); // This can probably be done without this one, but it works
+            //     q_new = q_x2_rot * q_y_rot * q_z_rot * q_x_rot * q_orig;
+            //     q_new.normalize();
+            //     // Convert back to pose orientation
+            //     tf2::convert(q_new, dockingTagPose.pose.orientation);
+
+            //     // set tag pose
+            //     dockingTagPose.pose.position.x = tf.transform.translation.x;
+            //     dockingTagPose.pose.position.y = tf.transform.translation.y;
+            //     dockingTagPose.pose.position.z = tf.transform.translation.z - 0.7;
+            //     dockingPub_->publish(dockingTagPose);
+
+            // }
+
         }
         else 
         {
@@ -373,7 +404,7 @@ void PoseCorrectionNode::onCamera(
             pose.localTransform = tagToHusky;
             transformVec.push_back(pose);
 
-            // LINK - Publish docking pose
+            // LINK - Publish docking pose 2
             if(id == 1 || id == 2)
             {
                 // Convert to a tf2::Transform
@@ -397,7 +428,7 @@ void PoseCorrectionNode::onCamera(
                 dockMsg.header.frame_id = "tag" + tagFamilyStr_ + ":" + std::to_string(id);
                 // dockMsg.pose.position.x = tagToHusky.getOrigin().getX();
                 // dockMsg.pose.position.y = tagToHusky.getOrigin().getY();
-                // dockMsg.pose.position.z = tagToHusky.getOrigin().getZ();
+                dockMsg.pose.position.z = 0.2;
                 dockMsg.pose.orientation.w = rotation.getW();
                 dockMsg.pose.orientation.x = rotation.getX();
                 dockMsg.pose.orientation.y = rotation.getY();
