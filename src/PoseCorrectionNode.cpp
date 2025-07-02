@@ -390,7 +390,6 @@ void PoseCorrectionNode::onCamera(
                 rotation.setRPY(r, p, y);
                 rotation.normalize();
 
-
                 // // Convert to pose message and publish
                 geometry_msgs::msg::PoseStamped dockMsg;                
 
