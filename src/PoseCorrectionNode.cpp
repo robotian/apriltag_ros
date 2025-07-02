@@ -380,9 +380,15 @@ void PoseCorrectionNode::onCamera(
                 // tf2::Vector3 dockTrans(out.transform.translation.x, out.transform.translation.y, out.transform.translation.z);
                 // tf2::Quaternion dockRot(out.transform.rotation.x, out.transform.rotation.y, out.transform.rotation.z, out.transform.rotation.w);
                 // tf2::Transform dockTagTf;
-                // dockTagTf.setOrigin(dockTrans);
+                // dockTagTf.setOrigin(0, 0, 0);
                 // dockTagTf.setRotation(dockRot);
                 // // dockTagTf = dockTagTf.inverse();
+
+                // Pitch because its in the apriltag's coordinate frame w.r.t the map frame
+                double r=0, p=1.57, y=0;
+                tf2::Quaternion rotation;
+                rotation.setRPY(r, p, y);
+                rotation.normalize();
 
 
                 // // Convert to pose message and publish
@@ -393,10 +399,10 @@ void PoseCorrectionNode::onCamera(
                 // dockMsg.pose.position.x = tagToHusky.getOrigin().getX();
                 // dockMsg.pose.position.y = tagToHusky.getOrigin().getY();
                 // dockMsg.pose.position.z = tagToHusky.getOrigin().getZ();
-                // dockMsg.pose.orientation.w = tagToHusky.getRotation().getW();
-                // dockMsg.pose.orientation.x = tagToHusky.getRotation().getX();
-                // dockMsg.pose.orientation.y = tagToHusky.getRotation().getY();
-                // dockMsg.pose.orientation.z = tagToHusky.getRotation().getZ();
+                dockMsg.pose.orientation.w = rotation.getW();
+                dockMsg.pose.orientation.x = rotation.getX();
+                dockMsg.pose.orientation.y = rotation.getY();
+                dockMsg.pose.orientation.z = rotation.getZ();
                 dockingPub_->publish(dockMsg);
             }
 
