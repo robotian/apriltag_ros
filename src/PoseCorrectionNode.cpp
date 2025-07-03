@@ -138,6 +138,10 @@ PoseCorrectionNode::PoseCorrectionNode(const rclcpp::NodeOptions& options) : Nod
     // Grab the hamming and profling parameters
     declare_parameter("max_hamming", 0, descr("reject detections with more corrected bits than allowed"));
     declare_parameter("profile", false, descr("print profiling information to stdout"));
+    
+    // Grab translation and rotation of the published docking pose from the detected tag (in the tag's frame)
+    dockOffset_ = declare_parameter("dock_pose_translation", std::vector<double>{0.0, 0.0, 0.0}, descr("Offset from the tag with which to dock in Apriltag coordinate frame", true));
+    dockRotation_ = declare_parameter("dock_pose_rotation", std::vector<double>{0.0, 1.57, 0.0}, descr("Rotation from the with which to dock in Apriltag coordinate frame", true));
 
     // Grab the global poses for each tag
     for(int64_t id : tagIDs) 
@@ -409,9 +413,8 @@ void PoseCorrectionNode::onCamera(
             if(std::find(dockIDs_.begin(), dockIDs_.end(), id) != dockIDs_.end())
             {
                 // Pitch because its in the apriltag's coordinate frame w.r.t the map frame
-                double r=0, p=1.57, y=0;
                 tf2::Quaternion rotation;
-                rotation.setRPY(r, p, y);
+                rotation.setRPY(dockRotation_[0], dockRotation_[1], dockRotation_[2]);
                 rotation.normalize();
 
                 // // Convert to pose message and publish
@@ -419,9 +422,9 @@ void PoseCorrectionNode::onCamera(
 
                 dockMsg.header.stamp = this->get_clock()->now();
                 dockMsg.header.frame_id = "tag" + tagFamilyStr_ + ":" + std::to_string(id);
-                // dockMsg.pose.position.x = tagToHusky.getOrigin().getX();
-                // dockMsg.pose.position.y = tagToHusky.getOrigin().getY();
-                // dockMsg.pose.position.z = 0.2;
+                dockMsg.pose.position.x = dockOffset_[0];
+                dockMsg.pose.position.y = dockOffset_[1];
+                dockMsg.pose.position.z = dockOffset_[2];
                 dockMsg.pose.orientation.w = rotation.getW();
                 dockMsg.pose.orientation.x = rotation.getX();
                 dockMsg.pose.orientation.y = rotation.getY();

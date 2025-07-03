@@ -109,8 +109,13 @@ private:
     std::unordered_map<std::string, tf2::Transform> tagTransformMap_;
     std::unordered_map<int, apriltag_detection_t*> detectionMap_;
 
+    // Counter/Parameter to throttle how often the pose correction and global transform publish runs (every nth frame)
     int detectionThrottle_ = 0;
     int correct_every_n_frames_ = 10;
+
+    // Offset & Rotation for the docking position
+    std::vector<double> dockOffset_ = {0.0, 0.0, 0.0}; // XYZ
+    std::vector<double> dockRotation_ = {0.0, 0.0, 0.0}; //RPY
 
 
     /**
