@@ -67,6 +67,7 @@ private:
     std::unordered_map<int, std::string> tagFrames_;
     std::unordered_map<int, double> tagSizes_;
     std::vector<long int> tagIDs_;
+    std::vector<long int> dockIDs_;
     double maxTagDist_;
 
     // Maps of tag IDs to pose and frame name
@@ -109,7 +110,7 @@ private:
     std::unordered_map<int, apriltag_detection_t*> detectionMap_;
 
     int detectionThrottle_ = 0;
-    int run_every_n_frames = 10;
+    int correct_every_n_frames_ = 10;
 
 
     /**
