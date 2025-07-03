@@ -292,7 +292,7 @@ void PoseCorrectionNode::onCamera(
 
     // Set up vector of transformations to publish
     std::vector<geometry_msgs::msg::TransformStamped> transformsToTags;
-    std::vector<int> consideredTagIDs_;
+    std::vector<int> consideredTagIDs;
 
     // Don't waste any time if we don't have any tags
     if(zarray_size(detections) == 0)
@@ -355,7 +355,7 @@ void PoseCorrectionNode::onCamera(
             if(tagDist < maxTagDist_) 
             {
                 transformsToTags.push_back(tf);
-                consideredTagIDs_.push_back(currDetection->id);
+                consideredTagIDs.push_back(currDetection->id);
                 detectionMap_[currDetection->id] = currDetection;
             }
             else
@@ -382,7 +382,7 @@ void PoseCorrectionNode::onCamera(
     }
 
     // Don't waste any effort if we haven't found any tags within our max transform distance
-    if(consideredTagIDs_.size() == 0)
+    if(consideredTagIDs.size() == 0)
     {
         apriltag_detections_destroy(detections);
         detectionMap_.clear();
@@ -394,7 +394,7 @@ void PoseCorrectionNode::onCamera(
 
     // LINK - Compute global pose from each detected tag
     std::vector<detectionPose> transformVec;
-    for(auto id : consideredTagIDs_)
+    for(auto id : consideredTagIDs)
     {
             // Use TF to get the local transform in the right coordinate frame
             tf2::Transform tagToHusky;
